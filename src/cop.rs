@@ -20,7 +20,10 @@ use tokio::sync::Mutex as AsyncMutex;
 use tokio::task::AbortHandle;
 use tracing::{info, warn};
 
-const ALPN: &[u8] = b"cassis-order";
+pub const ALPN: &[u8] = b"cassis-order";
+/// The alpn of the admin interface, `hyperb://<id>/admin` (see the hyperb
+/// spec, section 3).
+pub const ADMIN_ALPN: &[u8] = b"hyperb/0/admin";
 const INVOICE_TTL_SECS: u64 = 15 * 60;
 
 /// A service: what a flow on its endpoint shows and does.
@@ -28,6 +31,10 @@ const INVOICE_TTL_SECS: u64 = 15 * 60;
 pub trait Service: Send + Sync + 'static {
     fn name(&self) -> &'static str;
     fn description(&self) -> &'static str;
+    /// What the service's web page shows of what it holds, as HTML.
+    fn preview(&self) -> String {
+        String::new()
+    }
     /// A flow was opened: draw its first page. `session` is the one the
     /// client sent in its `hello`.
     async fn open(self: Arc<Self>, session: String, out: Out) -> Result<Arc<dyn Flow>, String>;
@@ -53,6 +60,13 @@ pub struct Out {
 }
 
 impl Out {
+    pub fn new(send: SendStream) -> Self {
+        Self {
+            stream: Arc::new(AsyncMutex::new(Stream { send, page: None })),
+            tasks: Default::default(),
+        }
+    }
+
     pub async fn send(&self, lines: String) -> Result<(), String> {
         let mut stream = self.stream.lock().await;
         stream
@@ -91,7 +105,7 @@ impl Out {
             .push(tokio::spawn(task).abort_handle());
     }
 
-    fn stop(&self) {
+    pub fn stop(&self) {
         for task in self.tasks.lock().unwrap_or_else(|e| e.into_inner()).drain(..) {
             task.abort();
         }
@@ -99,10 +113,10 @@ impl Out {
 }
 
 /// An endpoint whose id is the public key of `secret`.
-pub async fn bind(secret: [u8; 32]) -> Result<Endpoint, String> {
+pub async fn bind(secret: [u8; 32], alpn: &[u8]) -> Result<Endpoint, String> {
     let endpoint = Endpoint::builder(presets::N0)
         .secret_key(SecretKey::from(secret))
-        .alpns(vec![ALPN.to_vec()])
+        .alpns(vec![alpn.to_vec()])
         .bind()
         .await
         .map_err(|e| format!("bind iroh endpoint: {e}"))?;
@@ -143,10 +157,7 @@ pub async fn serve(endpoint: Endpoint, service: Arc<dyn Service>) {
             let Ok((send, recv)) = connection.accept_bi().await else {
                 return;
             };
-            let out = Out {
-                stream: Arc::new(AsyncMutex::new(Stream { send, page: None })),
-                tasks: Default::default(),
-            };
+            let out = Out::new(send);
             if let Err(error) = flow(service.clone(), out.clone(), recv).await {
                 warn!("{} flow ended: {error}", service.name());
             }

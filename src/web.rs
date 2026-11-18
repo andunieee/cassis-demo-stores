@@ -7,6 +7,7 @@ use axum::http::StatusCode;
 use axum::response::Html;
 use axum::routing::get;
 use axum::Router;
+use crate::cop::Service;
 use std::sync::Arc;
 
 pub struct Listing {
@@ -14,6 +15,7 @@ pub struct Listing {
     pub name: &'static str,
     pub description: &'static str,
     pub uri: String,
+    pub service: Arc<dyn Service>,
 }
 
 const STYLE: &str = "\
@@ -25,9 +27,11 @@ main{max-width:40rem;margin:0 auto;padding:2rem 1rem}\
 h1{margin:0 0 .25rem}h2{margin:0}a{color:var(--accent)}\
 code{display:block;overflow-wrap:anywhere;font-size:.8rem;margin:.5rem 0}\
 .qr svg{width:12rem;height:12rem;background:#fff;border-radius:8px}\
-.muted{opacity:.7}";
+.muted{opacity:.7}\
+.canvas{display:block;width:100%;image-rendering:pixelated;border:1px solid var(--line);border-radius:8px}\
+.message{white-space:pre-wrap;overflow-wrap:anywhere}";
 
-fn escape(text: &str) -> String {
+pub fn escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
@@ -78,10 +82,19 @@ async fn service(
         .find(|listing| listing.slug == slug)
         .ok_or(StatusCode::NOT_FOUND)?;
     let uri = escape(&listing.uri);
+    let preview = listing.service.preview();
+    // What the service holds changes as people pay: look again now and then.
+    let refresh = if preview.is_empty() {
+        ""
+    } else {
+        "<meta http-equiv=\"refresh\" content=\"15\">"
+    };
     Ok(document(
-        &format!("<link rel=\"cassis-order\" href=\"{uri}\">"),
+        &format!("<link rel=\"cassis-order\" href=\"{uri}\">{refresh}"),
         &format!(
             "<p><a href=\"/\">All stores</a></p><h1>{name}</h1><p>{description}</p>\
+             {preview}\
+             <h2>Pay to take part</h2>\
              <div class=\"card qr\">{qr}</div>\
              <p><a href=\"{uri}\">Open in your wallet</a></p><code>{uri}</code>",
             name = listing.name,

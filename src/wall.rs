@@ -46,6 +46,37 @@ impl Wall {
         (walls.len(), messages.iter().rev().cloned().collect())
     }
 
+    /// Fires when the wall changes.
+    pub fn subscribe(&self) -> broadcast::Receiver<()> {
+        self.changed.subscribe()
+    }
+
+    /// The number of the last wall and its messages, oldest first.
+    pub fn messages(&self) -> (usize, Vec<String>) {
+        let walls = self.walls.lock().unwrap_or_else(|e| e.into_inner());
+        (walls.len(), walls.last().expect("there is always a wall").clone())
+    }
+
+    /// Take `message` out of wall `number`, where it was written at
+    /// `index` (0 is the oldest), if it is still there.
+    pub fn remove(&self, number: usize, index: usize, message: &str) -> bool {
+        let mut removed = false;
+        self.change(|walls| {
+            if let Some(messages) = number.checked_sub(1).and_then(|i| walls.get_mut(i)) {
+                if messages.get(index).map(String::as_str) == Some(message) {
+                    messages.remove(index);
+                    removed = true;
+                }
+            }
+        });
+        removed
+    }
+
+    /// Wipe every message off the last wall.
+    pub fn clear(&self) {
+        self.change(|walls| walls.last_mut().expect("there is always a wall").clear());
+    }
+
     fn change(&self, change: impl FnOnce(&mut Vec<Vec<String>>)) {
         let json = {
             let mut walls = self.walls.lock().unwrap_or_else(|e| e.into_inner());
@@ -68,6 +99,21 @@ impl Service for Wall {
 
     fn description(&self) -> &'static str {
         "Write on the wall: the n-th message costs n sats"
+    }
+
+    fn preview(&self) -> String {
+        let (number, messages) = self.last();
+        let mut html = format!("<h2>Wall {number}</h2>");
+        if messages.is_empty() {
+            html.push_str("<p class=\"muted\">Nothing written on this wall yet.</p>");
+        }
+        for message in messages {
+            html.push_str(&format!(
+                "<div class=\"card message\">{}</div>",
+                crate::web::escape(&message)
+            ));
+        }
+        html
     }
 
     async fn open(self: Arc<Self>, _session: String, out: Out) -> Result<Arc<dyn Flow>, String> {

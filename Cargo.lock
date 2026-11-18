@@ -2742,6 +2742,7 @@ dependencies = [
  "cassis-core",
  "cassis-wallet",
  "clap",
+ "hyperb-cassis-wallet",
  "hypereffect",
  "iroh 1.0.3",
  "png",
@@ -6144,6 +6145,21 @@ dependencies = [
  "tower-service",
  "tracing",
  "windows-registry",
+]
+
+[[package]]
+name = "hyperb-cassis-wallet"
+version = "0.1.0"
+dependencies = [
+ "cassis-core",
+ "cassis-networks",
+ "hypereffect",
+ "lowercase-hex",
+ "serde",
+ "tokio",
+ "toml 0.8.23",
+ "toml_edit 0.22.27",
+ "tracing",
 ]
 
 [[package]]

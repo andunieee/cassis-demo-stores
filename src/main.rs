@@ -2,27 +2,29 @@
 //! services, one iroh key each, and a web page that links to them. This
 //! node, a Cassis wallet home, is the payee of all of them.
 
+mod admin;
 mod cop;
 mod pixels;
 mod wall;
 mod web;
 
 use cassis_wallet::{Home, Node, NodeConfig};
+use hyperb_cassis_wallet::{ConfigFile, WalletAdmin};
 use clap::Parser;
 use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{info, info_span};
+use tracing::{info, info_span, warn};
 
 #[derive(Parser)]
 #[command(about = "Cassis Order Protocol demo stores")]
 struct Cli {
-    /// Wallet home directory, with the networks to be paid on enabled
-    /// (see `cassis-wallet enable`). Defaults to `$CASSIS_HOME`, else
-    /// `~/.cassis`.
-    #[arg(long, value_name = "DIR")]
-    home: Option<PathBuf>,
+    /// Wallet home directory, which holds the config and the wallet data.
+    /// Networks are added in the admin interface, or with `cassis-wallet
+    /// enable`.
+    #[arg(long, value_name = "DIR", env = "CASSIS_HOME", default_value = "./cassis_wallet")]
+    home: PathBuf,
     /// Where the stores keep what they sell.
     #[arg(long, value_name = "DIR", default_value = "data")]
     data: PathBuf,
@@ -53,13 +55,18 @@ async fn main() {
 }
 
 async fn run(cli: Cli) -> Result<(), String> {
-    let home = Home::open(cli.home)?;
+    let home = Home::open(Some(cli.home))?;
     let span = info_span!("node", node = "demo-stores");
-    let networks = home
-        .open_networks(&home.config.network_ids()?, &span)
-        .await?;
+    // The wallets are opened here and not by the node, so the admin
+    // interface can move funds on the very same ones that get paid.
+    let (wallets, networks) = WalletAdmin::open(
+        ConfigFile::new(home.dir.join(cassis_wallet::config::FILE), "networks"),
+        &home.dir,
+        span.clone(),
+    )
+    .await?;
     if networks.is_empty() {
-        return Err("no networks enabled; see `cassis-wallet enable`".into());
+        warn!("no networks are open: add one in the admin interface, or see `cassis-wallet enable`");
     }
     let node = Node::start(
         NodeConfig {
@@ -71,22 +78,16 @@ async fn run(cli: Cli) -> Result<(), String> {
         networks,
     )
     .await?;
+    wallets.attach(Arc::new(admin::NodeHost(node.clone())));
     std::fs::create_dir_all(&cli.data).map_err(|e| format!("create {}: {e}", cli.data.display()))?;
 
-    let services: [(&str, Arc<dyn cop::Service>); 2] = [
-        (
-            "pixels",
-            pixels::Pixels::new(node.clone(), cli.data.join("pixels.json"))?,
-        ),
-        (
-            "wall",
-            wall::Wall::new(node.clone(), cli.data.join("wall.json"))?,
-        ),
-    ];
+    let pixels = pixels::Pixels::new(node.clone(), cli.data.join("pixels.json"))?;
+    let wall = wall::Wall::new(node.clone(), cli.data.join("wall.json"))?;
+    let services: [(&str, Arc<dyn cop::Service>); 2] = [("pixels", pixels.clone()), ("wall", wall.clone())];
     let mut listings = Vec::new();
     let mut endpoints = Vec::new();
     for (slug, service) in services {
-        let endpoint = cop::bind(service_secret(&home, slug)).await?;
+        let endpoint = cop::bind(service_secret(&home, slug), cop::ALPN).await?;
         let uri = cop::uri(&endpoint, service.name());
         println!("{}: {uri}", service.name());
         listings.push(web::Listing {
@@ -94,9 +95,15 @@ async fn run(cli: Cli) -> Result<(), String> {
             name: service.name(),
             description: service.description(),
             uri,
+            service: service.clone(),
         });
         endpoints.push(tokio::spawn(cop::serve(endpoint, service)));
     }
+
+    let admin = admin::Admin::new(&cli.data, wall, pixels, wallets)?;
+    let endpoint = cop::bind(service_secret(&home, "admin"), cop::ADMIN_ALPN).await?;
+    admin.announce(&endpoint);
+    endpoints.push(tokio::spawn(admin::serve(admin, endpoint)));
 
     let listener = tokio::net::TcpListener::bind(cli.listen)
         .await

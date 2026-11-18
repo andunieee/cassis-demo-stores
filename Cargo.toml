@@ -4,15 +4,15 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["cashu"]
-arkade = ["cassis-wallet/arkade"]
-bark-lightning = ["cassis-wallet/bark-lightning"]
-bitcoin = ["cassis-wallet/bitcoin"]
-cashu = ["cassis-wallet/cashu"]
-fedimint = ["cassis-wallet/fedimint"]
-lightning = ["cassis-wallet/lightning"]
-liquid = ["cassis-wallet/liquid"]
-rootstock = ["cassis-wallet/rootstock"]
+default = []
+arkade = ["cassis-wallet/arkade", "hyperb-cassis-wallet/arkade"]
+bark-lightning = ["cassis-wallet/bark-lightning", "hyperb-cassis-wallet/bark-lightning"]
+bitcoin = ["cassis-wallet/bitcoin", "hyperb-cassis-wallet/bitcoin"]
+cashu = ["cassis-wallet/cashu", "hyperb-cassis-wallet/cashu"]
+fedimint = ["cassis-wallet/fedimint", "hyperb-cassis-wallet/fedimint"]
+lightning = ["cassis-wallet/lightning", "hyperb-cassis-wallet/lightning"]
+liquid = ["cassis-wallet/liquid", "hyperb-cassis-wallet/liquid"]
+rootstock = ["cassis-wallet/rootstock", "hyperb-cassis-wallet/rootstock"]
 
 [dependencies]
 async-trait = "0.1.91"
@@ -21,6 +21,7 @@ cassis-core = { git = "https://github.com/andunieee/cassis", tag = "v0.3.0", def
 cassis-wallet = { git = "https://github.com/andunieee/cassis", tag = "v0.3.0", default-features = false }
 clap = { version = "4.6.6", features = ["derive", "env"] }
 base64 = "0.22.1"
+hyperb-cassis-wallet = { path = "../hyperb-cassis-wallet" }
 hypereffect = "0.6.3"
 iroh = "1.0.3"
 png = "0.17"

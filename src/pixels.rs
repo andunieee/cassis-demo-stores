@@ -117,11 +117,38 @@ impl Pixels {
     }
 
     fn paint(&self, pixels: &[Pixel]) {
-        let json = {
-            let mut canvas = self.canvas.lock().unwrap_or_else(|e| e.into_inner());
+        self.change(|canvas| {
             for pixel in pixels {
                 canvas.pixels[(pixel.row - 1) * WIDTH + pixel.col - 1] = pixel.color;
             }
+        });
+    }
+
+    /// Fires when the picture changes.
+    pub fn subscribe(&self) -> broadcast::Receiver<()> {
+        self.changed.subscribe()
+    }
+
+    /// Wipe the picture back to blank.
+    pub fn reset(&self) {
+        self.change(|canvas| *canvas = Canvas::default());
+    }
+
+    /// How many pixels are not blank.
+    pub fn painted(&self) -> usize {
+        let canvas = self.canvas.lock().unwrap_or_else(|e| e.into_inner());
+        canvas.pixels.iter().filter(|pixel| **pixel != BLANK).count()
+    }
+
+    /// The picture as a PNG data URI.
+    pub fn image(&self) -> String {
+        self.canvas.lock().unwrap_or_else(|e| e.into_inner()).data_uri()
+    }
+
+    fn change(&self, change: impl FnOnce(&mut Canvas)) {
+        let json = {
+            let mut canvas = self.canvas.lock().unwrap_or_else(|e| e.into_inner());
+            change(&mut canvas);
             serde_json::to_vec(&*canvas).expect("serialize the canvas")
         };
         let tmp = self.path.with_extension("tmp");
@@ -140,6 +167,10 @@ impl Service for Pixels {
 
     fn description(&self) -> &'static str {
         "A 30x20 image painted pixel by pixel, 3 sats each"
+    }
+
+    fn preview(&self) -> String {
+        format!("<img class=\"canvas\" src=\"{}\" alt=\"The pixel wall\">", self.image())
     }
 
     async fn open(self: Arc<Self>, session: String, out: Out) -> Result<Arc<dyn Flow>, String> {
