@@ -2642,7 +2642,7 @@ dependencies = [
 [[package]]
 name = "cassis-arkade"
 version = "0.1.0"
-source = "git+https://github.com/andunieee/cassis?tag=v0.3.0#634c032ea85f015887e329acce0ea39345a673a8"
+source = "git+https://github.com/andunieee/cassis?rev=18fb852c298685a55d28264b689aa46b6f7e97bd#18fb852c298685a55d28264b689aa46b6f7e97bd"
 dependencies = [
  "ark-bdk-wallet",
  "ark-client",
@@ -2661,21 +2661,20 @@ dependencies = [
 [[package]]
 name = "cassis-bark-lightning"
 version = "0.1.0"
-source = "git+https://github.com/andunieee/cassis?tag=v0.3.0#634c032ea85f015887e329acce0ea39345a673a8"
+source = "git+https://github.com/andunieee/cassis?rev=18fb852c298685a55d28264b689aa46b6f7e97bd#18fb852c298685a55d28264b689aa46b6f7e97bd"
 dependencies = [
  "async-trait",
  "bark-bitcoin-ext",
  "bark-wallet",
  "cassis-core",
  "serde",
- "sha2 0.10.9",
  "tracing",
 ]
 
 [[package]]
 name = "cassis-bitcoin"
 version = "0.1.0"
-source = "git+https://github.com/andunieee/cassis?tag=v0.3.0#634c032ea85f015887e329acce0ea39345a673a8"
+source = "git+https://github.com/andunieee/cassis?rev=18fb852c298685a55d28264b689aa46b6f7e97bd#18fb852c298685a55d28264b689aa46b6f7e97bd"
 dependencies = [
  "async-trait",
  "bitcoin",
@@ -2688,7 +2687,7 @@ dependencies = [
 [[package]]
 name = "cassis-cashu"
 version = "0.1.0"
-source = "git+https://github.com/andunieee/cassis?tag=v0.3.0#634c032ea85f015887e329acce0ea39345a673a8"
+source = "git+https://github.com/andunieee/cassis?rev=18fb852c298685a55d28264b689aa46b6f7e97bd#18fb852c298685a55d28264b689aa46b6f7e97bd"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2706,7 +2705,7 @@ dependencies = [
 [[package]]
 name = "cassis-core"
 version = "0.1.0"
-source = "git+https://github.com/andunieee/cassis?tag=v0.3.0#634c032ea85f015887e329acce0ea39345a673a8"
+source = "git+https://github.com/andunieee/cassis?rev=18fb852c298685a55d28264b689aa46b6f7e97bd#18fb852c298685a55d28264b689aa46b6f7e97bd"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2758,7 +2757,7 @@ dependencies = [
 [[package]]
 name = "cassis-fedimint"
 version = "0.1.0"
-source = "git+https://github.com/andunieee/cassis?tag=v0.3.0#634c032ea85f015887e329acce0ea39345a673a8"
+source = "git+https://github.com/andunieee/cassis?rev=18fb852c298685a55d28264b689aa46b6f7e97bd#18fb852c298685a55d28264b689aa46b6f7e97bd"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2784,20 +2783,18 @@ dependencies = [
 [[package]]
 name = "cassis-liquid"
 version = "0.1.0"
-source = "git+https://github.com/andunieee/cassis?tag=v0.3.0#634c032ea85f015887e329acce0ea39345a673a8"
+source = "git+https://github.com/andunieee/cassis?rev=18fb852c298685a55d28264b689aa46b6f7e97bd#18fb852c298685a55d28264b689aa46b6f7e97bd"
 dependencies = [
  "async-trait",
  "cassis-core",
  "fs2",
  "futures",
- "hmac",
  "lwk_common",
  "lwk_signer",
  "lwk_wollet",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "thiserror 1.0.69",
  "tokio",
  "tokio-tungstenite 0.26.2",
@@ -2807,7 +2804,7 @@ dependencies = [
 [[package]]
 name = "cassis-lnd"
 version = "0.1.0"
-source = "git+https://github.com/andunieee/cassis?tag=v0.3.0#634c032ea85f015887e329acce0ea39345a673a8"
+source = "git+https://github.com/andunieee/cassis?rev=18fb852c298685a55d28264b689aa46b6f7e97bd#18fb852c298685a55d28264b689aa46b6f7e97bd"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2824,7 +2821,7 @@ dependencies = [
 [[package]]
 name = "cassis-networks"
 version = "0.1.0"
-source = "git+https://github.com/andunieee/cassis?tag=v0.3.0#634c032ea85f015887e329acce0ea39345a673a8"
+source = "git+https://github.com/andunieee/cassis?rev=18fb852c298685a55d28264b689aa46b6f7e97bd#18fb852c298685a55d28264b689aa46b6f7e97bd"
 dependencies = [
  "cassis-arkade",
  "cassis-bark-lightning",
@@ -2841,7 +2838,7 @@ dependencies = [
 [[package]]
 name = "cassis-rootstock"
 version = "0.1.0"
-source = "git+https://github.com/andunieee/cassis?tag=v0.3.0#634c032ea85f015887e329acce0ea39345a673a8"
+source = "git+https://github.com/andunieee/cassis?rev=18fb852c298685a55d28264b689aa46b6f7e97bd#18fb852c298685a55d28264b689aa46b6f7e97bd"
 dependencies = [
  "alloy",
  "async-trait",
@@ -2854,7 +2851,7 @@ dependencies = [
 [[package]]
 name = "cassis-wallet"
 version = "0.1.0"
-source = "git+https://github.com/andunieee/cassis?tag=v0.3.0#634c032ea85f015887e329acce0ea39345a673a8"
+source = "git+https://github.com/andunieee/cassis?rev=18fb852c298685a55d28264b689aa46b6f7e97bd#18fb852c298685a55d28264b689aa46b6f7e97bd"
 dependencies = [
  "cassis-core",
  "cassis-networks",
@@ -6154,7 +6151,6 @@ dependencies = [
  "cassis-core",
  "cassis-networks",
  "hypereffect",
- "lowercase-hex",
  "serde",
  "tokio",
  "toml 0.8.23",

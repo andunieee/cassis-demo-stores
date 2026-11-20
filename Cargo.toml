@@ -17,8 +17,8 @@ rootstock = ["cassis-wallet/rootstock", "hyperb-cassis-wallet/rootstock"]
 [dependencies]
 async-trait = "0.1.91"
 axum = { version = "0.8", default-features = false, features = ["tokio", "http1"] }
-cassis-core = { git = "https://github.com/andunieee/cassis", tag = "v0.3.0", default-features = false, features = ["node"] }
-cassis-wallet = { git = "https://github.com/andunieee/cassis", tag = "v0.3.0", default-features = false }
+cassis-core = { git = "https://github.com/andunieee/cassis", rev = "18fb852c298685a55d28264b689aa46b6f7e97bd", default-features = false, features = ["node"] }
+cassis-wallet = { git = "https://github.com/andunieee/cassis", rev = "18fb852c298685a55d28264b689aa46b6f7e97bd", default-features = false }
 clap = { version = "4.6.6", features = ["derive", "env"] }
 base64 = "0.22.1"
 hyperb-cassis-wallet = { path = "../hyperb-cassis-wallet" }

@@ -98,7 +98,7 @@ impl Admin {
         let operators = Operators::load(data.join("operators.json"))?;
         let setup = (!operators.any())
             .then(|| {
-                let secret = cassis_core::keys::new_network_secret();
+                let secret = Sha256::digest(cassis_core::keys::generate_mnemonic());
                 secret.iter().map(|byte| format!("{byte:02x}")).collect::<String>()
             });
         Ok(Arc::new(Self {

@@ -224,7 +224,7 @@ pub async fn request_payment(
         .await?;
     out.send(encode_line("invoice", &json!({"invoice": invoice, "memo": memo})))
         .await?;
-    let key = InvoiceHash(invoice.body.payment_hash.to_string());
+    let key = InvoiceHash(invoice.body.payment_hash.0);
     let watcher = node.clone();
     node.spawn(async move {
         while unix_now() < expires_at {
