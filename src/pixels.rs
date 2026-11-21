@@ -323,7 +323,7 @@ impl Flow for PixelFlow {
 fn page(canvas: &str, cart: &Cart) -> vtree::Node {
     let mut pixels = cart.pixels.clone();
     pixels.sort_by_key(|p| (p.row, p.col));
-    let mut page = column("page").children([
+    column("page").children([
         text("title").variant("h1").text("Pixel wall"),
         text("blurb").variant("caption").text(format!(
             "{WIDTH} x {HEIGHT} pixels, {PIXEL_SATS} sats each. Everyone paints on the same image."
@@ -332,69 +332,66 @@ fn page(canvas: &str, cart: &Cart) -> vtree::Node {
             .src(canvas)
             .alt("The pixel wall")
             .variant("full"),
-    ]);
-    if let Some(paid) = &cart.paid {
-        page = page.child(notice("paid").variant("success").text(paid.as_str()));
-    }
-    page = page.child(
-        card("paint").title("Pick a pixel").children([
-            row("position").children([
-                input("col")
-                    .variant("number")
-                    .label(format!("Column (1-{WIDTH})"))
-                    .bind("paint.col"),
-                input("row")
-                    .variant("number")
-                    .label(format!("Row (1-{HEIGHT})"))
-                    .bind("paint.row"),
-            ]),
-            select("color")
-                .label("Color")
-                .bind("paint.color")
-                .options(PALETTE.iter().map(|(name, value)| json!({"value": value, "label": name})).collect::<Vec<_>>()),
-            input("custom")
-                .label("Or any color, as #rrggbb")
-                .placeholder("#ff00ff")
-                .bind("paint.custom"),
-        ]),
-    );
-    if let Some(error) = &cart.error {
-        page = page.child(notice("error").variant("failure").text(error.as_str()));
-    }
-    page.child(button("add").label("Add to my pixels").on_press(Handler::action("add")))
-        .child(
-            card("cart").title(format!("My pixels ({})", pixels.len())).child(
-                list("cart-list").empty("No pixels picked yet.").children(
-                    pixels.iter().map(|p| {
-                        row(format!("pixel-{}-{}", p.col, p.row)).children([
-                            text(format!("pixel-{}-{}-text", p.col, p.row)).text(format!(
-                                "column {}, row {}: {}",
-                                p.col,
-                                p.row,
-                                hex(p.color)
-                            )),
-                            button(format!("pixel-{}-{}-remove", p.col, p.row))
-                                .variant("plain")
-                                .label("Remove")
-                                .on_press(
-                                    Handler::action("remove")
-                                        .payload(json!({"col": p.col, "row": p.row})),
-                                ),
-                        ])
-                    }),
+        card("paint")
+            .title("Pick a pixel")
+            .children([
+                row("position").children([
+                    input("col")
+                        .variant("number")
+                        .label(format!("Column (1-{WIDTH})"))
+                        .bind("paint.col"),
+                    input("row")
+                        .variant("number")
+                        .label(format!("Row (1-{HEIGHT})"))
+                        .bind("paint.row"),
+                ]),
+                row("colors").children([
+                    select("color")
+                        .label("Color")
+                        .bind("paint.color")
+                        .options(PALETTE.iter().map(|(name, value)| json!({"value": value, "label": name})).collect::<Vec<_>>()),
+                    input("custom")
+                        .label("Or any color, as #rrggbb")
+                        .placeholder("#ff00ff")
+                        .bind("paint.custom"),
+                ]),
+            ])
+            .children(cart.error.as_ref().map(|error| notice("error").variant("failure").text(error.as_str())))
+            .child(
+                row("paint-actions").justify("end").child(
+                    button("add").label("Add to my pixels").on_press(Handler::action("add")),
                 ),
             ),
-        )
-        .child(row("buttons").children([
-            button("clear")
-                .variant("plain")
-                .label("Clear")
-                .disabled(pixels.is_empty())
-                .on_press(Handler::action("clear")),
-            button("pay")
-                .variant("primary")
-                .label(format!("Pay {} sats", PIXEL_SATS * pixels.len() as u64))
-                .disabled(pixels.is_empty())
-                .on_press(Handler::action("pay")),
-        ]))
+        card("cart")
+            .title(format!("My pixels ({})", pixels.len()))
+            .child(
+                list("cart-list").empty("No pixels picked yet.").children(pixels.iter().map(|p| {
+                    row(format!("pixel-{}-{}", p.col, p.row)).justify("between").children([
+                        text(format!("pixel-{}-{}-text", p.col, p.row)).text(format!(
+                            "column {}, row {}: {}",
+                            p.col,
+                            p.row,
+                            hex(p.color)
+                        )),
+                        button(format!("pixel-{}-{}-remove", p.col, p.row))
+                            .variant("plain")
+                            .label("Remove")
+                            .on_press(Handler::action("remove").payload(json!({"col": p.col, "row": p.row}))),
+                    ])
+                })),
+            )
+            .children(cart.paid.as_ref().map(|paid| notice("paid").variant("success").text(paid.as_str())))
+            .child(row("buttons").justify("end").children([
+                button("clear")
+                    .variant("plain")
+                    .label("Clear")
+                    .disabled(pixels.is_empty())
+                    .on_press(Handler::action("clear")),
+                button("pay")
+                    .variant("primary")
+                    .label(format!("Pay {} sats", PIXEL_SATS * pixels.len() as u64))
+                    .disabled(pixels.is_empty())
+                    .on_press(Handler::action("pay")),
+            ])),
+    ])
 }

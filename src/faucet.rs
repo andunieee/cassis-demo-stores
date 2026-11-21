@@ -6,7 +6,7 @@
 use crate::cop::{request_invoice, Flow, Out, Service};
 use async_trait::async_trait;
 use cassis_core::{unix_now, Invoice};
-use hypereffect::vtree::{self, button, column, input, notice, text};
+use hypereffect::vtree::{self, button, column, input, notice, row, text};
 use hypereffect::{json, Action, Handler};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -158,7 +158,7 @@ impl Service for Faucet {
             out: out.clone(),
             state: Default::default(),
         });
-        out.signal(json!({"faucet": {"amount": flow.service.limits.request_sats.min(10).to_string()}}))
+        out.signal(json!({"faucet": {"amount": flow.service.limits.request_sats.min(10)}}))
             .await?;
         flow.redraw().await?;
         Ok(flow)
@@ -312,27 +312,30 @@ impl Flow for FaucetFlow {
 }
 
 fn page(limits: Limits, status: &Status) -> vtree::Node {
-    let mut page = column("page").children([
+    // The status is always a notice, so its type stays the same as it changes.
+    let status = match status {
+        Status::None => None,
+        Status::Asked(sats) => Some(("info", format!("Waiting for your wallet's invoice for {sats} sats…"))),
+        Status::Sending => Some(("info", "Sending…".to_string())),
+        Status::Paid(text) => Some(("success", text.clone())),
+        Status::Error(text) => Some(("failure", text.clone())),
+    };
+    column("page").children([
         text("title").variant("h1").text("Faucet"),
         text("blurb").variant("caption").text(format!(
             "Ask for up to {} sats at a time. Each wallet may take {} sats in all.",
             limits.request_sats, limits.wallet_sats
         )),
-    ]);
-    match status {
-        Status::None => {}
-        Status::Asked(sats) => {
-            page = page.child(text("status").text(format!("Waiting for your wallet's invoice for {sats} sats…")))
-        }
-        Status::Sending => page = page.child(text("status").text("Sending…")),
-        Status::Paid(text) => page = page.child(notice("status").variant("success").text(text.as_str())),
-        Status::Error(text) => page = page.child(notice("status").variant("failure").text(text.as_str())),
-    }
-    page.children([
-        input("amount").label("Sats").bind("faucet.amount"),
-        button("request")
-            .variant("primary")
-            .label("Request")
-            .on_press(Handler::action("request")),
+        row("ask").children([
+            input("amount")
+                .variant("number")
+                .label(format!("Sats (1-{})", limits.request_sats))
+                .bind("faucet.amount"),
+            button("request")
+                .variant("primary")
+                .label("Request")
+                .on_press(Handler::action("request")),
+        ]),
     ])
+    .children(status.map(|(variant, text)| notice("status").variant(variant).text(text)))
 }

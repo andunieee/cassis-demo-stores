@@ -4,7 +4,7 @@
 
 use crate::cop::{request_payment, Flow, Out, Service};
 use async_trait::async_trait;
-use hypereffect::vtree::{self, button, column, divider, input, list, notice, text};
+use hypereffect::vtree::{self, button, card, column, divider, input, list, notice, row, text};
 use hypereffect::{json, Action, Handler};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -247,35 +247,44 @@ impl Flow for WallFlow {
 }
 
 fn page(number: usize, messages: &[String], status: &Status) -> vtree::Node {
-    let mut page = column("page").children([
+    let status = match status {
+        Status::None => None,
+        Status::Paid(text) => Some(notice("status").variant("success").text(text.as_str())),
+        Status::Error(text) => Some(notice("status").variant("failure").text(text.as_str())),
+    };
+    column("page").children([
         text("title").variant("h1").text("Wall of text"),
         text("blurb").variant("caption").text(format!(
-            "Wall {number}. The n-th message on a wall costs n sats; a new wall costs {} sats.",
+            "The n-th message on a wall costs n sats; a new wall costs {} sats.",
             wall_sats(number)
         )),
-    ]);
-    match status {
-        Status::None => {}
-        Status::Paid(text) => page = page.child(notice("status").variant("success").text(text.as_str())),
-        Status::Error(text) => page = page.child(notice("status").variant("failure").text(text.as_str())),
-    }
-    page.children([
-        input("text")
-            .variant("multiline")
-            .label("Your message")
-            .placeholder("Write something")
-            .bind("wall.text"),
-        button("post")
-            .variant("primary")
-            .label(format!("Post for {} sats", message_sats(messages.len())))
-            .on_press(Handler::action("post")),
-        list("messages")
-            .empty("Nothing written on this wall yet.")
-            .children(messages.iter().enumerate().map(|(i, message)| {
-                // Ids name the message, not its place, so a new one does not
-                // rename the others.
-                text(format!("message-{number}-{}", messages.len() - i)).text(message.as_str())
-            })),
+        card("write")
+            .title("Write on the wall")
+            .child(
+                input("text")
+                    .variant("multiline")
+                    .label(format!("Your message (up to {MAX_CHARS} characters)"))
+                    .placeholder("Write something")
+                    .bind("wall.text"),
+            )
+            .children(status)
+            .child(
+                row("write-actions").justify("end").child(
+                    button("post")
+                        .variant("primary")
+                        .label(format!("Post for {} sats", message_sats(messages.len())))
+                        .on_press(Handler::action("post")),
+                ),
+            ),
+        card("wall").title(format!("Wall {number}")).child(
+            list("messages")
+                .empty("Nothing written on this wall yet.")
+                .children(messages.iter().enumerate().map(|(i, message)| {
+                    // Ids name the message, not its place, so a new one does not
+                    // rename the others.
+                    text(format!("message-{number}-{}", messages.len() - i)).text(message.as_str())
+                })),
+        ),
         divider("divider"),
         button("newwall")
             .variant("plain")
