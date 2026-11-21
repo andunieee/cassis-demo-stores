@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use cassis_core::unix_now;
 use cassis_wallet::db::{InvoiceHash, InvoiceState};
 use cassis_wallet::Node;
-use hypereffect::message::encode_line;
+use hypereffect::message::{encode_line, parse_line};
 use hypereffect::vtree;
 use hypereffect::{json, Action, Metadata, RendererMessage, ServerMessage};
 use iroh::endpoint::{presets, SendStream};
@@ -44,6 +44,13 @@ pub trait Service: Send + Sync + 'static {
 #[async_trait]
 pub trait Flow: Send + Sync {
     async fn action(&self, action: Action) -> Result<(), String>;
+    /// The client answered an `invoicerequest` with `invoice`. Nothing is
+    /// asked of a client unless a flow sends one, so by default an
+    /// `invoice` is unsolicited and ignored.
+    async fn invoice(&self, _invoice: hypereffect::Value) -> Result<(), String> {
+        warn!("ignoring an unsolicited invoice");
+        Ok(())
+    }
 }
 
 struct Stream {
@@ -191,15 +198,35 @@ async fn flow(
         if line.is_empty() {
             continue;
         }
+        // `invoice` is COP's, not hypereffect's: look at it first.
+        if let Ok(("invoice", body)) = parse_line(&line) {
+            flow.invoice(body.get("invoice").cloned().unwrap_or_default())
+                .await?;
+            continue;
+        }
         match RendererMessage::parse(&line) {
             Ok(RendererMessage::Action(action)) => flow.action(action).await?,
             Ok(RendererMessage::Hello { .. }) => warn!("ignoring a second hello"),
-            // Nothing here offers the payer money, so an `invoice` from the
-            // client is unsolicited.
             Err(error) => warn!("ignoring message: {error}"),
         }
     }
     Ok(())
+}
+
+/// Ask the client for an invoice of `sats` on any network of this node,
+/// to pay it: the answer comes to [`Flow::invoice`].
+pub async fn request_invoice(node: &Node, out: &Out, sats: u64, memo: &str) -> Result<(), String> {
+    let networks: Vec<String> = node.network_ids().iter().map(|network| network.to_string()).collect();
+    out.send(encode_line(
+        "invoicerequest",
+        &json!({
+            "amount": sats,
+            "networks": networks,
+            "memo": memo,
+            "expiresIn": INVOICE_TTL_SECS,
+        }),
+    ))
+    .await
 }
 
 /// Ask the payer for `sats` with an invoice of this node, and run

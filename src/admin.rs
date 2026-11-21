@@ -1,6 +1,7 @@
 //! The admin interface: a hyperb app over iroh, at `hyperb://<id>/admin`,
 //! for the operators of this server, which can take texts off the wall,
-//! wipe the wall and the picture, and manage the wallets that get paid
+//! wipe the wall and the picture, see what the faucet gave and let wallets
+//! take from it again, and manage the wallets that get paid
 //! (see `hyperb-cassis-wallet`).
 //!
 //! Only the keys listed in `operators.json` in the data directory are let
@@ -8,6 +9,7 @@
 //! console: the key that opens it first becomes the operator.
 
 use crate::cop::Out;
+use crate::faucet::{short, Faucet};
 use crate::pixels::Pixels;
 use crate::wall::Wall;
 use cassis_core::NetworkId;
@@ -82,6 +84,7 @@ impl Operators {
 pub struct Admin {
     wall: Arc<Wall>,
     pixels: Arc<Pixels>,
+    faucet: Arc<Faucet>,
     wallets: Arc<WalletAdmin>,
     operators: Operators,
     /// The secret of the setup link, while there is no operator.
@@ -93,6 +96,7 @@ impl Admin {
         data: &std::path::Path,
         wall: Arc<Wall>,
         pixels: Arc<Pixels>,
+        faucet: Arc<Faucet>,
         wallets: Arc<WalletAdmin>,
     ) -> Result<Arc<Self>, String> {
         let operators = Operators::load(data.join("operators.json"))?;
@@ -104,6 +108,7 @@ impl Admin {
         Ok(Arc::new(Self {
             wall,
             pixels,
+            faucet,
             wallets,
             operators,
             setup: Mutex::new(setup),
@@ -208,6 +213,7 @@ struct View {
 enum Wipe {
     Wall,
     Pixels,
+    Faucet,
 }
 
 struct Session {
@@ -239,12 +245,14 @@ async fn session(
         let _watching = watcher.admin.wallets.watch();
         let mut wall = watcher.admin.wall.subscribe();
         let mut pixels = watcher.admin.pixels.subscribe();
+        let mut faucet = watcher.admin.faucet.subscribe();
         let mut wallets = watcher.admin.wallets.updates();
         let mut tick = tokio::time::interval(REFRESH);
         loop {
             tokio::select! {
                 _ = wall.recv() => {}
                 _ = pixels.recv() => {}
+                _ = faucet.recv() => {}
                 _ = wallets.recv() => {}
                 _ = tick.tick() => {}
             }
@@ -317,6 +325,14 @@ impl Session {
             }
             "wall.reset" => self.ask(Wipe::Wall),
             "pixels.reset" => self.ask(Wipe::Pixels),
+            "faucet.reset" => self.ask(Wipe::Faucet),
+            "faucet.forget" => {
+                let wallet = payload.and_then(|p| p["wallet"].as_str()).unwrap_or_default();
+                match self.admin.faucet.forget(wallet) {
+                    true => Ok(Some(format!("{} may take from the faucet again", short(wallet)))),
+                    false => Err("That wallet has taken nothing".into()),
+                }
+            }
             "wipe.cancel" => {
                 self.view().confirm = None;
                 Ok(None)
@@ -329,6 +345,10 @@ impl Session {
                 Some(Wipe::Pixels) => {
                     self.admin.pixels.reset();
                     Ok(Some("The picture is blank".into()))
+                }
+                Some(Wipe::Faucet) => {
+                    self.admin.faucet.reset();
+                    Ok(Some("Every wallet may take from the faucet again".into()))
                 }
                 None => Err("Nothing to confirm".into()),
             },
@@ -359,6 +379,9 @@ impl Session {
             tab("tab/pixels")
                 .label("Pixel wall")
                 .children(self.pixels_tab(confirm == Some(Wipe::Pixels))),
+            tab("tab/faucet")
+                .label("Faucet")
+                .children(self.faucet_tab(confirm == Some(Wipe::Faucet))),
             tab("tab/wallets").label("Wallets").children(self.admin.wallets.view()),
         ]))
     }
@@ -386,6 +409,38 @@ impl Session {
             )),
             list,
             wipe("wall", "Reset the wall", "This takes every message off the wall.", confirming),
+        ]
+    }
+
+    fn faucet_tab(&self, confirming: bool) -> Vec<vtree::Node> {
+        let wallets = self.admin.faucet.wallets();
+        let limits = self.admin.faucet.limits();
+        let total: u64 = wallets.iter().map(|(_, sats)| sats).sum();
+        vec![
+            text("faucet/blurb").variant("caption").text(format!(
+                "{total} sats given to {} wallet(s). At most {} per request and {} per wallet.",
+                wallets.len(),
+                limits.request_sats,
+                limits.wallet_sats
+            )),
+            list("faucet/wallets")
+                .empty("No wallet has taken anything yet.")
+                .children(wallets.iter().map(|(wallet, sats)| {
+                    let id = format!("faucet/{wallet}");
+                    row(id.clone()).children([
+                        text(format!("{id}/text")).text(format!("{} took {sats} sats", short(wallet))),
+                        button(format!("{id}/forget"))
+                            .variant("plain")
+                            .label("Let it take again")
+                            .on_press(Handler::action("faucet.forget").payload(json!({"wallet": wallet}))),
+                    ])
+                })),
+            wipe(
+                "faucet",
+                "Reset the faucet",
+                "Every wallet may take its full limit again.",
+                confirming,
+            ),
         ]
     }
 

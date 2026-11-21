@@ -4,6 +4,7 @@
 
 mod admin;
 mod cop;
+mod faucet;
 mod pixels;
 mod wall;
 mod web;
@@ -31,6 +32,12 @@ struct Cli {
     /// Where to serve the web page.
     #[arg(long, value_name = "ADDR", default_value = "127.0.0.1:8080")]
     listen: SocketAddr,
+    /// The most sats the faucet gives in one request.
+    #[arg(long, value_name = "SATS", default_value_t = 100)]
+    faucet_request: u64,
+    /// The most sats the faucet gives one wallet in all.
+    #[arg(long, value_name = "SATS", default_value_t = 1000)]
+    faucet_wallet: u64,
 }
 
 /// The secret of the endpoint of the service `slug`: stable, so its URI
@@ -83,7 +90,19 @@ async fn run(cli: Cli) -> Result<(), String> {
 
     let pixels = pixels::Pixels::new(node.clone(), cli.data.join("pixels.json"))?;
     let wall = wall::Wall::new(node.clone(), cli.data.join("wall.json"))?;
-    let services: [(&str, Arc<dyn cop::Service>); 2] = [("pixels", pixels.clone()), ("wall", wall.clone())];
+    let faucet = faucet::Faucet::new(
+        node.clone(),
+        cli.data.join("faucet.json"),
+        faucet::Limits {
+            request_sats: cli.faucet_request,
+            wallet_sats: cli.faucet_wallet,
+        },
+    )?;
+    let services: [(&str, Arc<dyn cop::Service>); 3] = [
+        ("pixels", pixels.clone()),
+        ("wall", wall.clone()),
+        ("faucet", faucet.clone()),
+    ];
     let mut listings = Vec::new();
     let mut endpoints = Vec::new();
     for (slug, service) in services {
@@ -100,7 +119,7 @@ async fn run(cli: Cli) -> Result<(), String> {
         endpoints.push(tokio::spawn(cop::serve(endpoint, service)));
     }
 
-    let admin = admin::Admin::new(&cli.data, wall, pixels, wallets)?;
+    let admin = admin::Admin::new(&cli.data, wall, pixels, faucet, wallets)?;
     let endpoint = cop::bind(service_secret(&home, "admin"), cop::ADMIN_ALPN).await?;
     admin.announce(&endpoint);
     endpoints.push(tokio::spawn(admin::serve(admin, endpoint)));
