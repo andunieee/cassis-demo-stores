@@ -15,7 +15,7 @@ use tracing::info;
 
 const WIDTH: usize = 30;
 const HEIGHT: usize = 20;
-const PIXEL_SATS: u64 = 3;
+const PIXEL_SATS: u64 = 50;
 /// Side of a painted pixel in the PNG sent to clients.
 const SCALE: usize = 10;
 const BLANK: [u8; 3] = [0xee, 0xee, 0xee];
@@ -166,7 +166,7 @@ impl Service for Pixels {
     }
 
     fn description(&self) -> &'static str {
-        "A 30x20 image painted pixel by pixel, 3 sats each"
+        "A 30x20 image painted pixel by pixel, 50 sats each"
     }
 
     fn preview(&self) -> String {

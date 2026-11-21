@@ -1,6 +1,6 @@
-//! The wall of text: anyone can write on the last wall, and the n-th
-//! message of a wall costs n sats. Starting a new wall costs as many sats
-//! as the wall will be numbered; only the last wall is shown.
+//! The wall of text: anyone can write on the last wall, and each message
+//! costs [`MESSAGE_SATS`]. Starting a new wall costs 100 sats times the
+//! number the wall will have; only the last wall is shown.
 
 use crate::cop::{request_payment, Flow, Out, Service};
 use async_trait::async_trait;
@@ -12,6 +12,7 @@ use tokio::sync::broadcast;
 use tracing::info;
 
 const MAX_CHARS: usize = 144;
+const MESSAGE_SATS: u64 = 50;
 
 pub struct Wall {
     node: cassis_wallet::Node,
@@ -98,7 +99,7 @@ impl Service for Wall {
     }
 
     fn description(&self) -> &'static str {
-        "Write on the wall: the n-th message costs n sats"
+        "Write on the wall: 50 sats a message"
     }
 
     fn preview(&self) -> String {
@@ -167,14 +168,9 @@ impl WallFlow {
     }
 }
 
-/// The price of the next message on a wall with `messages` of them.
-fn message_sats(messages: usize) -> u64 {
-    messages as u64 + 1
-}
-
 /// The price of the wall after `walls` walls.
 fn wall_sats(walls: usize) -> u64 {
-    walls as u64 + 1
+    100 * (walls as u64 + 1)
 }
 
 #[async_trait]
@@ -198,7 +194,7 @@ impl Flow for WallFlow {
                 // Whoever pays gets the price they were quoted, on the wall
                 // they were quoted it for, even if the wall moved on since.
                 let (number, messages) = self.service.last();
-                let sats = message_sats(messages.len());
+                let sats = MESSAGE_SATS;
                 let flow = (self.service.clone(), self.out.clone(), self.status.clone());
                 request_payment(
                     &self.service.node,
@@ -255,7 +251,7 @@ fn page(number: usize, messages: &[String], status: &Status) -> vtree::Node {
     column("page").children([
         text("title").variant("h1").text("Wall of text"),
         text("blurb").variant("caption").text(format!(
-            "The n-th message on a wall costs n sats; a new wall costs {} sats.",
+            "Each message costs {MESSAGE_SATS} sats; a new wall costs {} sats.",
             wall_sats(number)
         )),
         card("write")
@@ -272,7 +268,7 @@ fn page(number: usize, messages: &[String], status: &Status) -> vtree::Node {
                 row("write-actions").justify("end").child(
                     button("post")
                         .variant("primary")
-                        .label(format!("Post for {} sats", message_sats(messages.len())))
+                        .label(format!("Post for {MESSAGE_SATS} sats"))
                         .on_press(Handler::action("post")),
                 ),
             ),
