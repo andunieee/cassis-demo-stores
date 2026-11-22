@@ -5,8 +5,9 @@
 //! (see `hyperb-cassis-wallet`).
 //!
 //! Only the keys listed in `operators.json` in the data directory are let
-//! in. While there is none, a setup link with a secret is printed on the
-//! console: the key that opens it first becomes the operator.
+//! in. At every start a pairing link with a one-time secret is printed on
+//! the console: the key that opens it becomes an operator. An operator can
+//! let other keys in, and take them out again, from the Operators tab.
 
 use crate::cop::Out;
 use crate::faucet::{short, Faucet};
@@ -15,7 +16,7 @@ use crate::wall::Wall;
 use cassis_core::NetworkId;
 use cassis_wallet::Node;
 use hyperb_cassis_wallet::{Drafts, Host, WalletAdmin};
-use hypereffect::vtree::{self, button, card, column, image, list, notice, row, tab, tabs, text};
+use hypereffect::vtree::{self, button, card, column, image, input, list, notice, row, tab, tabs, text};
 use hypereffect::{json, Action, Handler, Metadata, RendererMessage, ServerMessage};
 use iroh::endpoint::{Connection, RecvStream};
 use iroh::Endpoint;
@@ -60,8 +61,15 @@ impl Operators {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
             Err(error) => return Err(format!("read {}: {error}", path.display())),
         };
-        let keys = keys.iter().map(|key| key.to_lowercase()).collect();
-        Ok(Self { path, keys: RwLock::new(keys) })
+        let mut valid = Vec::new();
+        for key in keys {
+            match operator_key(&key) {
+                Ok(key) if !valid.contains(&key) => valid.push(key),
+                Ok(_) => {}
+                Err(error) => warn!("ignoring operator key {key:?} in {}: {error}", path.display()),
+            }
+        }
+        Ok(Self { path, keys: RwLock::new(valid) })
     }
 
     fn any(&self) -> bool {
@@ -72,13 +80,55 @@ impl Operators {
         self.keys.read().unwrap_or_else(|e| e.into_inner()).iter().any(|k| k == key)
     }
 
-    fn add(&self, key: &str) -> Result<(), String> {
+    fn list(&self) -> Vec<String> {
+        self.keys.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Let `key` in. Whether it was not one already.
+    fn add(&self, key: &str) -> Result<bool, String> {
+        let key = operator_key(key)?;
         let mut keys = self.keys.write().unwrap_or_else(|e| e.into_inner());
-        keys.push(key.to_string());
-        let json = serde_json::to_vec_pretty(&*keys).expect("serialize the operators");
+        if keys.contains(&key) {
+            return Ok(false);
+        }
+        let mut next = keys.clone();
+        next.push(key);
+        self.save(&next)?;
+        *keys = next;
+        Ok(true)
+    }
+
+    /// Let `key` no longer in, unless it is `by` (the one asking). Whether
+    /// it was one.
+    fn remove(&self, key: &str, by: &str) -> Result<bool, String> {
+        let key = operator_key(key)?;
+        if key == operator_key(by)? {
+            return Err("You cannot remove your own key".into());
+        }
+        let mut keys = self.keys.write().unwrap_or_else(|e| e.into_inner());
+        if !keys.contains(&key) {
+            return Ok(false);
+        }
+        let next: Vec<String> = keys.iter().filter(|k| **k != key).cloned().collect();
+        self.save(&next)?;
+        *keys = next;
+        Ok(true)
+    }
+
+    fn save(&self, keys: &[String]) -> Result<(), String> {
+        let json = serde_json::to_vec_pretty(keys).expect("serialize the operators");
         std::fs::write(&self.path, json)
             .map_err(|e| format!("couldn't save {}: {e}", self.path.display()))
     }
+}
+
+/// An operator key as it is kept: the lowercase hex of an iroh endpoint's key.
+fn operator_key(key: &str) -> Result<String, String> {
+    key.trim()
+        .to_lowercase()
+        .parse::<iroh::PublicKey>()
+        .map(|key| key.to_string())
+        .map_err(|_| "an operator key is the key of an iroh endpoint".into())
 }
 
 pub struct Admin {
@@ -87,7 +137,7 @@ pub struct Admin {
     faucet: Arc<Faucet>,
     wallets: Arc<WalletAdmin>,
     operators: Operators,
-    /// The secret of the setup link, while there is no operator.
+    /// The secret of this start's pairing link, until a key uses it.
     setup: Mutex<Option<String>>,
 }
 
@@ -100,45 +150,44 @@ impl Admin {
         wallets: Arc<WalletAdmin>,
     ) -> Result<Arc<Self>, String> {
         let operators = Operators::load(data.join("operators.json"))?;
-        let setup = (!operators.any())
-            .then(|| {
-                let secret = Sha256::digest(cassis_core::keys::generate_mnemonic());
-                secret.iter().map(|byte| format!("{byte:02x}")).collect::<String>()
-            });
+        // A fresh pairing link at every start: whoever can read the console
+        // may let one more key in, paired or not.
+        let secret = Sha256::digest(cassis_core::keys::generate_mnemonic());
+        let setup = secret.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
         Ok(Arc::new(Self {
             wall,
             pixels,
             faucet,
             wallets,
             operators,
-            setup: Mutex::new(setup),
+            setup: Mutex::new(Some(setup)),
         }))
     }
 
-    /// Tell the console where the interface is.
+    /// Tell the console where the interface is, and how to pair a key.
     pub fn announce(&self, endpoint: &Endpoint) {
         let address = format!("hyperb://{}/admin", endpoint.id());
         match &*self.setup.lock().unwrap_or_else(|e| e.into_inner()) {
             Some(secret) => {
-                println!("admin: nobody is the operator yet. Open this in hyperb to become it (it works once):");
+                println!("admin: open this in hyperb to pair a key as an operator (it works once):");
                 println!("{address}#setup={secret}");
             }
             None => println!("admin: {address}"),
         }
     }
 
-    /// Let `key` in if `secret` is the setup link's. Whether it was.
+    /// Pair `key` if `secret` is the pairing link's. Whether it did.
     fn claim(&self, key: &str, secret: &str) -> Result<bool, String> {
         let mut setup = self.setup.lock().unwrap_or_else(|e| e.into_inner());
         // Compared as hashes, so the time it takes says nothing about the secret.
         let hash = |text: &str| Sha256::digest(text.as_bytes());
         let same = setup.as_deref().is_some_and(|expected| hash(expected) == hash(secret));
-        if !same || self.operators.any() {
+        if !same {
             return Ok(false);
         }
-        *setup = None;
-        info!("{key} opened the setup link and is now the operator");
         self.operators.add(key)?;
+        *setup = None;
+        info!("{key} opened the pairing link and is now an operator");
         Ok(true)
     }
 }
@@ -157,10 +206,11 @@ pub async fn serve(admin: Arc<Admin>, endpoint: Endpoint) {
 
 async fn connect(admin: Arc<Admin>, connection: Connection) {
     let key = connection.remote_id().to_string().to_lowercase();
-    // The handshake proved the key: someone else's is turned away before
-    // it can say anything.
-    if admin.operators.any() && !admin.operators.has(&key) {
-        warn!("the key {key} tried to open the admin interface; add it to operators.json if it is yours");
+    // The handshake proved the key. An unpaired key is turned away before it
+    // can say anything, unless a pairing link is still waiting to be used.
+    let pairing = admin.setup.lock().unwrap_or_else(|e| e.into_inner()).is_some();
+    if admin.operators.any() && !admin.operators.has(&key) && !pairing {
+        warn!("the key {key} tried to open the admin interface; pair it or add it to operators.json");
         return connection.close(CLOSE_NOT_ALLOWED.into(), b"this key is not an operator");
     }
     let Ok((send, recv)) = connection.accept_bi().await else {
@@ -174,17 +224,17 @@ async fn connect(admin: Arc<Admin>, connection: Connection) {
     let mut result = None;
     if !admin.operators.has(&key) {
         match params.get("setup").map(|secret| admin.claim(&key, secret)) {
-            Some(Ok(true)) => result = Some(Ok("You are the operator of this server now.".to_string())),
+            Some(Ok(true)) => result = Some(Ok("This key is paired as an operator now.".to_string())),
             Some(Err(error)) => result = Some(Err(error)),
             _ => {
                 return connection
-                    .close(CLOSE_NOT_ALLOWED.into(), b"open the setup link printed by the server");
+                    .close(CLOSE_NOT_ALLOWED.into(), b"open the pairing link printed by the server");
             }
         }
     }
     info!("admin session for {key}");
     let out = Out::new(send);
-    if let Err(error) = session(admin, out.clone(), lines, result).await {
+    if let Err(error) = session(admin, key.clone(), out.clone(), lines, result).await {
         warn!("admin session of {key} ended: {error}");
     }
     out.stop();
@@ -218,12 +268,15 @@ enum Wipe {
 
 struct Session {
     admin: Arc<Admin>,
+    /// The key this session was opened with.
+    key: String,
     out: Out,
     view: Mutex<View>,
 }
 
 async fn session(
     admin: Arc<Admin>,
+    key: String,
     out: Out,
     mut lines: Lines<BufReader<RecvStream>>,
     result: Option<Result<String, String>>,
@@ -234,6 +287,7 @@ async fn session(
     out.send(ServerMessage::from(metadata).to_line()).await?;
     let session = Arc::new(Session {
         admin: admin.clone(),
+        key,
         out: out.clone(),
         view: Mutex::new(View { result, ..View::default() }),
     });
@@ -302,6 +356,10 @@ impl Session {
             Ok(None) => {}
             Err(error) => warn!("admin: {}: {error}", action.name),
         }
+        // The key that was just added is of no more use in the field.
+        if action.name == "operator.add" && matches!(&result, Ok(Some(_))) {
+            self.out.signal(json!({"operator": {"key": ""}})).await?;
+        }
         if let Some(result) = result.transpose() {
             self.view().result = Some(result);
         }
@@ -331,6 +389,25 @@ impl Session {
                 match self.admin.faucet.forget(wallet) {
                     true => Ok(Some(format!("{} may take from the faucet again", short(wallet)))),
                     false => Err("That wallet has taken nothing".into()),
+                }
+            }
+            "operator.add" => {
+                let key = action.signal("operator.key").and_then(|v| v.as_str()).unwrap_or_default();
+                match self.admin.operators.add(key) {
+                    Ok(true) => {
+                        let key = key.trim().to_lowercase();
+                        Ok(Some(format!("{} may open this interface now", short(&key))))
+                    }
+                    Ok(false) => Err("That key is an operator already".into()),
+                    Err(error) => Err(error),
+                }
+            }
+            "operator.remove" => {
+                let key = payload.and_then(|p| p["key"].as_str()).unwrap_or_default();
+                match self.admin.operators.remove(key, &self.key) {
+                    Ok(true) => Ok(Some(format!("{} may no longer open this interface", short(key)))),
+                    Ok(false) => Err("That key is not an operator".into()),
+                    Err(error) => Err(error),
                 }
             }
             "wipe.cancel" => {
@@ -383,6 +460,7 @@ impl Session {
                 .label("Faucet")
                 .children(self.faucet_tab(confirm == Some(Wipe::Faucet))),
             tab("tab/wallets").label("Wallets").children(self.admin.wallets.view()),
+            tab("tab/operators").label("Operators").children(self.operators_tab()),
         ]))
     }
 
@@ -455,6 +533,48 @@ impl Session {
                 .alt("The pixel wall")
                 .variant("full"),
             wipe("pixels", "Reset the picture", "This paints every pixel blank.", confirming),
+        ]
+    }
+
+    fn operators_tab(&self) -> Vec<vtree::Node> {
+        let keys = self.admin.operators.list();
+        let rows = keys.iter().map(|key| {
+            let id = format!("operator/{key}");
+            let mut row = row(id.clone()).children([
+                text(format!("{id}/key")).text(key.as_str()),
+            ]);
+            if key == &self.key {
+                row = row.child(text(format!("{id}/you")).variant("caption").text("you"));
+            } else {
+                row = row.child(
+                    button(format!("{id}/remove"))
+                        .variant("plain")
+                        .label("Remove")
+                        .on_press(Handler::action("operator.remove").payload(json!({"key": key}))),
+                );
+            }
+            row
+        });
+        vec![
+            text("operators/blurb").variant("caption").text(format!(
+                "These {} iroh key(s) may open this interface. Yours is {}; you cannot remove it. \
+                 Only add a key you trust: it has all of this page's powers.",
+                keys.len(),
+                self.key
+            )),
+            list("operators/list").empty("No operators. Restart to print a pairing link.").children(rows),
+            card("operators/add").title("Let another key in").children([
+                input("key")
+                    .label("iroh key")
+                    .placeholder("64 hex characters")
+                    .bind("operator.key"),
+                row("operators/add-actions").justify("end").child(
+                    button("operator/add")
+                        .variant("primary")
+                        .label("Add operator")
+                        .on_press(Handler::action("operator.add")),
+                ),
+            ]),
         ]
     }
 }
