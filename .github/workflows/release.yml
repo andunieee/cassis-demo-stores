@@ -40,7 +40,7 @@ jobs:
       # Network backends compiled into the binary. The admin interface can
       # only open networks that were compiled in, so change this (or run the
       # workflow manually) to ship other ones.
-      FEATURES: ${{ inputs.features || 'bitcoin,lightning,vendored-openssl' }}
+      FEATURES: ${{ inputs.features || 'arkade,liquid,cashu,vendored-openssl' }}
       RELEASE_TAG: ${{ inputs.tag }}
       # Make the C dependencies of the crypto crates (aws-lc-sys, ring,
       # secp256k1-sys, ...) compile against musl, not the runner's glibc.
