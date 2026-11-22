@@ -1,0 +1,155 @@
+name: release
+
+# Builds a fully static x86_64 Linux binary (musl) and publishes it as a
+# workflow artifact. Pushing a `v*` tag also attaches the binary, a tarball
+# and its SHA-256 checksum to a GitHub release.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      features:
+        description: "Cargo features to build (comma-separated; include vendored-openssl for bitcoin)"
+        type: string
+        default: "bitcoin,lightning,vendored-openssl"
+      tag:
+        description: "Tag to publish as a GitHub release (optional)"
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  TARGET: x86_64-unknown-linux-musl
+  BIN: cassis-demo-stores
+  TARGET_DIR: target/x86_64-unknown-linux-musl/release
+
+jobs:
+  build:
+    name: build (${{ inputs.features || 'bitcoin,lightning,vendored-openssl' }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      # Network backends compiled into the binary. The admin interface can
+      # only open networks that were compiled in, so change this (or run the
+      # workflow manually) to ship other ones.
+      FEATURES: ${{ inputs.features || 'bitcoin,lightning,vendored-openssl' }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      # Make the C dependencies of the crypto crates (aws-lc-sys, ring,
+      # secp256k1-sys, ...) compile against musl, not the runner's glibc.
+      # Do not point the final linker at musl-gcc: rustc then emits a
+      # static-pie that still names /lib/ld-musl-x86_64.so.1 as its
+      # interpreter. The default `cc` driver with Rust's self-contained
+      # musl CRT produces a self-contained binary.
+      CC_x86_64_unknown_linux_musl: musl-gcc
+      RUSTFLAGS: "-C target-feature=+crt-static"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential file musl-tools musl-dev pkg-config \
+            clang libclang-dev protobuf-compiler cmake perl
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Make a cache key from the features
+        id: cache-key
+        run: echo "features=${FEATURES//[ ,]/-}" >> "$GITHUB_OUTPUT"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ env.TARGET }}-${{ steps.cache-key.outputs.features }}
+
+      - name: Build
+        run: |
+          cargo build --release --locked --target "$TARGET" \
+            --no-default-features --features "$FEATURES"
+
+      - name: Verify and strip the binary
+        run: |
+          bin="$TARGET_DIR/$BIN"
+          test -x "$bin"
+
+          echo "::group::file"
+          file "$bin"
+          echo "::endgroup::"
+
+          # A static musl binary has no PT_INTERP program header and no
+          # DT_NEEDED entries. Fail loudly if the host's glibc leaked in.
+          if readelf -l "$bin" | grep -qi 'interpreter'; then
+            echo "::error::$bin has a dynamic loader (PT_INTERP)"
+            exit 1
+          fi
+          if readelf -d "$bin" 2>/dev/null | grep -q 'NEEDED'; then
+            echo "::error::$bin has dynamic library dependencies"
+            exit 1
+          fi
+
+          "$bin" --help >/dev/null
+          strip "$bin"
+
+      - name: Package
+        run: |
+          if [ -n "$RELEASE_TAG" ]; then
+            version="${RELEASE_TAG#v}"
+          elif [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="$(date -u +%Y%m%d)-${GITHUB_SHA::7}"
+          fi
+          name="$BIN-$version-$TARGET"
+
+          mkdir -p dist "package/$BIN"
+          cp "$TARGET_DIR/$BIN" "dist/$name"
+          cp "$TARGET_DIR/$BIN" "package/$BIN/$BIN"
+          cp README.md "package/$BIN/README.md"
+          tar -C package -czf "dist/$name.tar.gz" "$BIN"
+
+          (cd dist && sha256sum "$name" "$name.tar.gz" > SHA256SUMS)
+          rm -rf package
+
+          echo "version $version" >> "$GITHUB_STEP_SUMMARY"
+          echo "features \`$FEATURES\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "target \`$TARGET\`" >> "$GITHUB_STEP_SUMMARY"
+          ls -lh dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cassis-demo-stores-x86_64-unknown-linux-musl
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: cassis-demo-stores-x86_64-unknown-linux-musl
+          path: dist
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          name: ${{ inputs.tag || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          files: dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true

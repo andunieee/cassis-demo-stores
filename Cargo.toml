@@ -13,6 +13,10 @@ fedimint = ["cassis-wallet/fedimint", "hyperb-cassis-wallet/fedimint"]
 lightning = ["cassis-wallet/lightning", "hyperb-cassis-wallet/lightning"]
 liquid = ["cassis-wallet/liquid", "hyperb-cassis-wallet/liquid"]
 rootstock = ["cassis-wallet/rootstock", "hyperb-cassis-wallet/rootstock"]
+# `bitcoin` pulls `esplora-client`, whose default transport uses native-tls.
+# For a fully static musl build, compile OpenSSL from source instead of
+# linking the host's shared libssl.
+vendored-openssl = ["dep:openssl-sys"]
 
 [dependencies]
 async-trait = "0.1.91"
@@ -24,6 +28,7 @@ base64 = "0.22.1"
 hyperb-cassis-wallet = { git = "https://github.com/andunieee/cassis", rev = "5a04b43034a4335311afc3954ef9ea4c1bdeca08" }
 hypereffect = "0.6.3"
 iroh = "1.0.3"
+openssl-sys = { version = "0.9.118", features = ["vendored"], optional = true }
 png = "0.17"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 rustls = { version = "0.23.43", default-features = false, features = ["ring", "aws_lc_rs"] }
