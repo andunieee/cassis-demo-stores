@@ -2,7 +2,7 @@
 //! costs [`MESSAGE_SATS`]. Starting a new wall costs 100 sats times the
 //! number the wall will have; only the last wall is shown.
 
-use crate::cop::{request_payment, Flow, Out, Service, Sessions};
+use crate::cop::{min_invoice_sats, request_payment, unpayable, Flow, Out, Service, Sessions};
 use crate::history::{Deed, History, Log};
 use async_trait::async_trait;
 use hypereffect::vtree::{self, button, card, column, input, list, notice, row, text};
@@ -81,6 +81,11 @@ impl Wall {
             }
         });
         removed
+    }
+
+    /// Draw every flow again, as for a change of the networks that pay.
+    pub fn refresh(&self) {
+        let _ = self.changed.send(());
     }
 
     /// Wipe every message off the last wall.
@@ -185,9 +190,10 @@ impl WallFlow {
 
     async fn redraw(&self) -> Result<(), String> {
         let (number, messages) = self.service.last();
+        let min = min_invoice_sats(&self.service.node);
         let page = {
             let session = self.session.lock().unwrap_or_else(|e| e.into_inner());
-            page(number, &messages, &session.status, self.log.card())
+            page(number, &messages, &session.status, min, self.log.card())
         };
         self.out.redraw(page).await
     }
@@ -275,7 +281,14 @@ impl Flow for WallFlow {
     }
 }
 
-fn page(number: usize, messages: &[String], status: &Status, history: Option<vtree::Node>) -> vtree::Node {
+fn page(
+    number: usize,
+    messages: &[String],
+    status: &Status,
+    min: Option<u64>,
+    history: Option<vtree::Node>,
+) -> vtree::Node {
+    let unpayable_post = unpayable(min, MESSAGE_SATS);
     let status = match status {
         Status::None => None,
         Status::Paid(text) => Some(notice("status").variant("success").text(text.as_str())),
@@ -299,12 +312,22 @@ fn page(number: usize, messages: &[String], status: &Status, history: Option<vtr
                 )
                 .children(status)
                 .child(
-                    row("write-actions").justify("end").child(
-                        button("post")
-                            .variant("primary")
-                            .label(format!("Post ({MESSAGE_SATS} sats)"))
-                            .on_press(Handler::action("post")),
-                    ),
+                    row("write-actions")
+                        .justify("end")
+                        .align("center")
+                        .wrap(true)
+                        .children(
+                            unpayable_post
+                                .as_ref()
+                                .map(|why| text("post-hint").variant("caption").text(why.as_str())),
+                        )
+                        .child(
+                            button("post")
+                                .variant("primary")
+                                .label(format!("Post ({MESSAGE_SATS} sats)"))
+                                .disabled(unpayable_post.is_some())
+                                .on_press(Handler::action("post")),
+                        ),
                 ),
             card("wall")
                 .title(format!("Wall {number} ({})", messages.len()))
@@ -325,6 +348,7 @@ fn page(number: usize, messages: &[String], status: &Status, history: Option<vtr
                         button("newwall")
                             .variant("plain")
                             .label(format!("New wall ({} sats)", wall_sats(number)))
+                            .disabled(unpayable(min, wall_sats(number)).is_some())
                             .on_press(Handler::action("newwall")),
                     ]),
                 ),
@@ -345,8 +369,10 @@ mod tests {
         let messages = vec!["hi".to_string(), "hi".to_string()];
         // vtree panics on an id used twice anywhere in the tree.
         for status in [Status::None, Status::Paid("Message posted.".into()), Status::Error("1 to 280 characters.".into())] {
-            vtree::render(&page(1, &[], &status, None));
-            vtree::render(&page(2, &messages, &status, log.card()));
+            for min in [None, Some(1), Some(475)] {
+                vtree::render(&page(1, &[], &status, min, None));
+                vtree::render(&page(2, &messages, &status, min, log.card()));
+            }
         }
     }
 }

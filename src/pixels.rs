@@ -1,7 +1,7 @@
 //! The pixel wall: a small image everyone paints on. A payer picks pixels
 //! by column and row and a color, then pays [`PIXEL_SATS`] for each one.
 
-use crate::cop::{request_payment, Flow, Out, Service, Sessions};
+use crate::cop::{min_invoice_sats, request_payment, unpayable, Flow, Out, Service, Sessions};
 use crate::history::{Deed, History, Log};
 use async_trait::async_trait;
 use base64::Engine;
@@ -129,6 +129,11 @@ impl Pixels {
         self.changed.subscribe()
     }
 
+    /// Draw every flow again, as for a change of the networks that pay.
+    pub fn refresh(&self) {
+        let _ = self.changed.send(());
+    }
+
     /// Wipe the picture back to blank.
     pub fn reset(&self) {
         self.change(|canvas| *canvas = Canvas::default());
@@ -243,9 +248,10 @@ impl PixelFlow {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .data_uri();
+        let min = min_invoice_sats(&self.service.node);
         let page = {
             let cart = self.cart.lock().unwrap_or_else(|e| e.into_inner());
-            page(&uri, &cart, self.log.card())
+            page(&uri, &cart, min, self.log.card())
         };
         self.out.redraw(page).await
     }
@@ -337,9 +343,11 @@ impl Flow for PixelFlow {
     }
 }
 
-fn page(canvas: &str, cart: &Cart, history: Option<vtree::Node>) -> vtree::Node {
+fn page(canvas: &str, cart: &Cart, min: Option<u64>, history: Option<vtree::Node>) -> vtree::Node {
     let mut pixels = cart.pixels.clone();
     pixels.sort_by_key(|p| (p.row, p.col));
+    let sats = PIXEL_SATS * pixels.len() as u64;
+    let unpayable = unpayable(min, sats);
     column("page")
         .children([
             column("heading").gap("none").children([
@@ -396,6 +404,11 @@ fn page(canvas: &str, cart: &Cart, history: Option<vtree::Node>) -> vtree::Node 
                     })),
                 )
                 .children(cart.paid.as_ref().map(|paid| notice("paid").variant("success").text(paid.as_str())))
+                .children(
+                    unpayable
+                        .as_ref()
+                        .map(|why| text("pay-hint").variant("caption").text(why.as_str())),
+                )
                 .child(row("buttons").justify("end").children([
                     button("clear")
                         .variant("plain")
@@ -404,8 +417,8 @@ fn page(canvas: &str, cart: &Cart, history: Option<vtree::Node>) -> vtree::Node 
                         .on_press(Handler::action("clear")),
                     button("pay")
                         .variant("primary")
-                        .label(format!("Pay {} sats", PIXEL_SATS * pixels.len() as u64))
-                        .disabled(pixels.is_empty())
+                        .label(format!("Pay {sats} sats"))
+                        .disabled(pixels.is_empty() || unpayable.is_some())
                         .on_press(Handler::action("pay")),
                 ])),
         ])

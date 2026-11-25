@@ -87,7 +87,11 @@ async fn run(cli: Cli) -> Result<(), String> {
         networks,
     )
     .await?;
-    wallets.attach(Arc::new(admin::NodeHost(node.clone())));
+    let networks_changed = tokio::sync::broadcast::channel(4).0;
+    wallets.attach(Arc::new(admin::NodeHost {
+        node: node.clone(),
+        changed: networks_changed.clone(),
+    }));
     std::fs::create_dir_all(&cli.data).map_err(|e| format!("create {}: {e}", cli.data.display()))?;
 
     let history = history::History::open(&cli.data.join("sessions.redb"))?;
@@ -103,6 +107,16 @@ async fn run(cli: Cli) -> Result<(), String> {
         history.clone(),
     )?;
     let casino = casino::Casino::new(node.clone(), cli.data.join("casino.json"), history)?;
+    // The pay buttons follow the networks that are open.
+    let mut networks = networks_changed.subscribe();
+    let stores = (pixels.clone(), wall.clone(), casino.clone());
+    tokio::spawn(async move {
+        while !matches!(networks.recv().await, Err(tokio::sync::broadcast::error::RecvError::Closed)) {
+            stores.0.refresh();
+            stores.1.refresh();
+            stores.2.refresh();
+        }
+    });
     let services: [(&str, Arc<dyn cop::Service>); 4] = [
         ("pixels", pixels.clone()),
         ("wall", wall.clone()),

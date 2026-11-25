@@ -5,7 +5,7 @@
 //! its wallet answers an `invoicerequest` and the payment goes through, so
 //! a winner who left, or whose payment failed, claims it later.
 
-use crate::cop::{request_invoice, request_payment, Flow, Out, Service, Sessions};
+use crate::cop::{min_invoice_sats, request_invoice, request_payment, unpayable, Flow, Out, Service, Sessions};
 use crate::history::{Deed, History, Log};
 use async_trait::async_trait;
 use cassis_core::{unix_now, Invoice};
@@ -54,6 +54,11 @@ impl Casino {
             changed: broadcast::channel(16).0,
             sessions: Sessions::new(history, "casino"),
         }))
+    }
+
+    /// Draw every flow again, as for a change of the networks that pay.
+    pub fn refresh(&self) {
+        let _ = self.changed.send(());
     }
 
     fn saved(&self) -> std::sync::MutexGuard<'_, Saved> {
@@ -231,7 +236,8 @@ impl CasinoFlow {
     async fn redraw(&self) -> Result<(), String> {
         let pot = self.service.pot();
         let owed = self.service.owed(&self.token);
-        let page = page(pot, owed, &self.state().status, self.log.card());
+        let min = min_invoice_sats(&self.service.node);
+        let page = page(pot, owed, &self.state().status, min, self.log.card());
         self.out.redraw(page).await
     }
 }
@@ -354,7 +360,8 @@ impl Flow for CasinoFlow {
     }
 }
 
-fn page(pot: u64, owed: u64, status: &Status, history: Option<vtree::Node>) -> vtree::Node {
+fn page(pot: u64, owed: u64, status: &Status, min: Option<u64>, history: Option<vtree::Node>) -> vtree::Node {
+    let unpayable = unpayable(min, TICKET_SATS);
     // The status is always a notice, so its type stays the same as it changes.
     let status = match status {
         Status::None => None,
@@ -387,13 +394,13 @@ fn page(pot: u64, owed: u64, status: &Status, history: Option<vtree::Node>) -> v
                 .children(status.map(|(variant, text)| notice("status").variant(variant).text(text)))
                 .child(
                     row("play-actions").justify("between").align("center").wrap(true).children([
-                        text("play-hint").variant("caption").text(format!(
-                            "A win now pays {} sats.",
-                            (pot + TICKET_SATS) * PRIZE_PERCENT / 100
-                        )),
+                        text("play-hint").variant("caption").text(unpayable.clone().unwrap_or_else(|| {
+                            format!("A win now pays {} sats.", (pot + TICKET_SATS) * PRIZE_PERCENT / 100)
+                        })),
                         button("play")
                             .variant("primary")
                             .label(format!("Play ({TICKET_SATS} sats)"))
+                            .disabled(unpayable.is_some())
                             .on_press(Handler::action("play")),
                     ]),
                 ),
@@ -420,8 +427,10 @@ mod tests {
         ];
         // vtree panics on an id used twice anywhere in the tree.
         for status in &statuses {
-            vtree::render(&page(0, 0, status, None));
-            vtree::render(&page(1000, 90, status, log.card()));
+            for min in [None, Some(1), Some(475)] {
+                vtree::render(&page(0, 0, status, min, None));
+                vtree::render(&page(1000, 90, status, min, log.card()));
+            }
         }
     }
 }

@@ -9,7 +9,7 @@ use cassis_wallet::db::{InvoiceHash, InvoiceState};
 use cassis_wallet::Node;
 use hypereffect::message::{encode_line, parse_line};
 use hypereffect::vtree;
-use hypereffect::{json, Action, Close, Map, Metadata, RendererMessage, ServerMessage, Value};
+use hypereffect::{json, Action, Close, LogType, Map, Metadata, RendererMessage, ServerMessage, Value};
 use iroh::endpoint::{presets, SendStream};
 use iroh::{Endpoint, SecretKey};
 use std::collections::HashMap;
@@ -159,6 +159,10 @@ impl Out {
 
     pub async fn signal(&self, patch: Value) -> Result<(), String> {
         self.send(ServerMessage::signal(patch).to_line()).await
+    }
+
+    pub async fn log(&self, log: hypereffect::Log) -> Result<(), String> {
+        self.send(log.to_line()).await
     }
 
     /// End the flow with a hypereffect `close` message and finish the stream.
@@ -326,9 +330,31 @@ pub async fn request_invoice(node: &Node, out: &Out, sats: u64, memo: &str) -> R
     .await
 }
 
+/// The fewest sats an invoice of this node can ask for: the lowest
+/// minimum of its networks, or `None` when no network is open.
+pub fn min_invoice_sats(node: &Node) -> Option<u64> {
+    node.network_ids()
+        .iter()
+        .filter_map(|id| node.receiver(id).ok())
+        .map(|receiver| receiver.min_htlc_msat().div_ceil(1000).max(1))
+        .min()
+}
+
+/// Why an invoice of `sats` cannot be made when invoices start at `min`
+/// sats ([`min_invoice_sats`]), if it cannot.
+pub fn unpayable(min: Option<u64>, sats: u64) -> Option<String> {
+    match min {
+        None => Some("No networks open to pay on.".into()),
+        Some(min) if sats < min => Some(format!("Payments start at {min} sats.")),
+        Some(_) => None,
+    }
+}
+
 /// Ask the payer for `sats` with an invoice of this node, and run
 /// `on_paid` once the node claims it. That is tied to the node, not to the
 /// flow: a payer who pays after disconnecting still gets what they paid for.
+/// An invoice that cannot be made is logged to the client, and the flow
+/// goes on.
 pub async fn request_payment(
     node: &Node,
     out: &Out,
@@ -337,7 +363,7 @@ pub async fn request_payment(
     on_paid: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), String> {
     let expires_at = unix_now() + INVOICE_TTL_SECS;
-    let invoice = node
+    let invoice = match node
         .create_invoice(
             &node.network_ids(),
             sats * 1000,
@@ -345,7 +371,16 @@ pub async fn request_payment(
             Some(memo.clone()),
             None,
         )
-        .await?;
+        .await
+    {
+        Ok(invoice) => invoice,
+        Err(error) => {
+            warn!("create an invoice of {sats} sats: {error}");
+            return out
+                .log(hypereffect::Log::new("Could not create the invoice.").detail(error).kind(LogType::Error))
+                .await;
+        }
+    };
     out.send(encode_line("invoice", &json!({"invoice": invoice, "memo": memo})))
         .await?;
     let key = InvoiceHash(invoice.body.payment_hash.0);
@@ -421,5 +456,13 @@ mod tests {
             Close::new(SESSION_NOT_FOUND).to_line(),
             "close {\"reason\":\"session_not_found\"}\n"
         );
+    }
+
+    #[test]
+    fn unpayable_below_the_minimum_or_without_networks() {
+        assert!(unpayable(None, 1000).is_some());
+        assert_eq!(unpayable(Some(475), 200), Some("Payments start at 475 sats.".into()));
+        assert_eq!(unpayable(Some(475), 475), None);
+        assert_eq!(unpayable(Some(1), 50), None);
     }
 }

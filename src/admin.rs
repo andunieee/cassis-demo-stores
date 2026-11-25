@@ -34,16 +34,22 @@ const HELLO_TIMEOUT: Duration = Duration::from_secs(30);
 const REFRESH: Duration = Duration::from_secs(5);
 const CLOSE_NOT_ALLOWED: u32 = 403;
 
-/// Gives the wallets' networks to the node that is paid on them.
-pub struct NodeHost(pub Node);
+/// Gives the wallets' networks to the node that is paid on them, and
+/// fires `changed` when they change, since what can be paid changes too.
+pub struct NodeHost {
+    pub node: Node,
+    pub changed: tokio::sync::broadcast::Sender<()>,
+}
 
 impl Host for NodeHost {
     fn opened(&self, network: Arc<dyn cassis_core::Network>) {
-        self.0.add_network(network);
+        self.node.add_network(network);
+        let _ = self.changed.send(());
     }
 
     fn closed(&self, id: &NetworkId) {
-        self.0.remove_network(id);
+        self.node.remove_network(id);
+        let _ = self.changed.send(());
     }
 }
 
