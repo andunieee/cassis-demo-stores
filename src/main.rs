@@ -5,6 +5,7 @@
 mod admin;
 mod cop;
 mod faucet;
+mod history;
 mod pixels;
 mod wall;
 mod web;
@@ -88,8 +89,9 @@ async fn run(cli: Cli) -> Result<(), String> {
     wallets.attach(Arc::new(admin::NodeHost(node.clone())));
     std::fs::create_dir_all(&cli.data).map_err(|e| format!("create {}: {e}", cli.data.display()))?;
 
-    let pixels = pixels::Pixels::new(node.clone(), cli.data.join("pixels.json"))?;
-    let wall = wall::Wall::new(node.clone(), cli.data.join("wall.json"))?;
+    let history = history::History::open(&cli.data.join("sessions.redb"))?;
+    let pixels = pixels::Pixels::new(node.clone(), cli.data.join("pixels.json"), history.clone())?;
+    let wall = wall::Wall::new(node.clone(), cli.data.join("wall.json"), history.clone())?;
     let faucet = faucet::Faucet::new(
         node.clone(),
         cli.data.join("faucet.json"),
@@ -97,6 +99,7 @@ async fn run(cli: Cli) -> Result<(), String> {
             request_sats: cli.faucet_request,
             wallet_sats: cli.faucet_wallet,
         },
+        history,
     )?;
     let services: [(&str, Arc<dyn cop::Service>); 3] = [
         ("pixels", pixels.clone()),

@@ -2,6 +2,7 @@
 //! on one connection (`hello`, then hypereffect lines both ways), and
 //! asking the payer for an invoice this node issues and claims.
 
+use crate::history::{History, Log};
 use async_trait::async_trait;
 use cassis_core::unix_now;
 use cassis_wallet::db::{InvoiceHash, InvoiceState};
@@ -27,23 +28,33 @@ pub const ADMIN_ALPN: &[u8] = b"hyperb/0/admin";
 pub const SESSION_NOT_FOUND: &str = "session_not_found";
 const INVOICE_TTL_SECS: u64 = 15 * 60;
 
-/// The sessions of a service, kept by the client's `session` token.
-pub struct Sessions<T>(Mutex<HashMap<String, Arc<Mutex<T>>>>);
-
-impl<T> Default for Sessions<T> {
-    fn default() -> Self {
-        Self(Mutex::new(HashMap::new()))
-    }
+/// The sessions of a service, kept by the client's `session` token: what
+/// a flow is in the middle of, in memory, and what was done in it, in the
+/// [`History`], which outlives a restart.
+pub struct Sessions<T> {
+    service: &'static str,
+    history: History,
+    open: Mutex<HashMap<String, Arc<Mutex<T>>>>,
 }
 
 impl<T: Default> Sessions<T> {
-    /// Find `session`, or start a new one unless `force_resume` asked not to.
-    pub fn open(&self, session: String, force_resume: bool) -> Option<Arc<Mutex<T>>> {
-        let mut sessions = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        match force_resume {
-            true => sessions.get(&session).cloned(),
-            false => Some(sessions.entry(session).or_default().clone()),
+    pub fn new(history: History, service: &'static str) -> Self {
+        Self {
+            service,
+            history,
+            open: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Find `session`, or start a new one unless `force_resume` asked not
+    /// to. A session the history knows resumes with what was done in it.
+    pub fn open(&self, session: String, force_resume: bool) -> Option<(Arc<Mutex<T>>, Log)> {
+        let mut open = self.open.lock().unwrap_or_else(|e| e.into_inner());
+        if force_resume && !open.contains_key(&session) && !self.history.knows(self.service, &session) {
+            return None;
+        }
+        let log = self.history.log(self.service, &session);
+        Some((open.entry(session).or_default().clone(), log))
     }
 }
 
@@ -370,17 +381,28 @@ mod tests {
 
     #[test]
     fn sessions_resume_or_fail_when_forced() {
-        let sessions = Sessions::<u32>::default();
+        let history = History::in_memory();
+        let sessions = Sessions::<u32>::new(history.clone(), "wall");
         assert!(sessions.open("unknown".into(), true).is_none());
 
-        let first = sessions.open("abc".into(), false).unwrap();
+        let (first, _) = sessions.open("abc".into(), false).unwrap();
         *first.lock().unwrap() = 42;
 
-        let resumed = sessions.open("abc".into(), true).unwrap();
+        let (resumed, _) = sessions.open("abc".into(), true).unwrap();
         assert_eq!(*resumed.lock().unwrap(), 42);
 
-        let reopened = sessions.open("abc".into(), false).unwrap();
+        let (reopened, _) = sessions.open("abc".into(), false).unwrap();
         assert_eq!(*reopened.lock().unwrap(), 42);
+
+        // After a restart, what the flow was in the middle of is gone, but
+        // the session resumes with what was done in it.
+        let (_, log) = sessions.open("abc".into(), false).unwrap();
+        log.record(10, crate::history::Deed::Received);
+        let restarted = Sessions::<u32>::new(history, "wall");
+        let (state, log) = restarted.open("abc".into(), true).unwrap();
+        assert_eq!(*state.lock().unwrap(), 0);
+        assert_eq!(log.entries().len(), 1);
+        assert!(restarted.open("unknown".into(), true).is_none());
 
         assert_eq!(
             Close::new(SESSION_NOT_FOUND).to_line(),

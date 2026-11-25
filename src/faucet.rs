@@ -4,9 +4,10 @@
 //! each may take a limited sum in all.
 
 use crate::cop::{request_invoice, Flow, Out, Service, Sessions};
+use crate::history::{Deed, History, Log};
 use async_trait::async_trait;
 use cassis_core::{unix_now, Invoice};
-use hypereffect::vtree::{self, button, column, input, notice, row, text};
+use hypereffect::vtree::{self, button, card, column, input, notice, row, text};
 use hypereffect::{json, Action, Handler};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -34,7 +35,12 @@ pub struct Faucet {
 }
 
 impl Faucet {
-    pub fn new(node: cassis_wallet::Node, path: PathBuf, limits: Limits) -> Result<Arc<Self>, String> {
+    pub fn new(
+        node: cassis_wallet::Node,
+        path: PathBuf,
+        limits: Limits,
+        history: History,
+    ) -> Result<Arc<Self>, String> {
         let taken = match std::fs::read(&path) {
             Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display()))?,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
@@ -46,7 +52,7 @@ impl Faucet {
             limits,
             taken: Mutex::new(taken),
             changed: broadcast::channel(16).0,
-            sessions: Default::default(),
+            sessions: Sessions::new(history, "faucet"),
         }))
     }
 
@@ -150,7 +156,7 @@ impl Service for Faucet {
         force_resume: bool,
         out: Out,
     ) -> Result<Option<Arc<dyn Flow>>, String> {
-        let Some(state) = self.sessions.open(session, force_resume) else {
+        let Some((state, log)) = self.sessions.open(session, force_resume) else {
             return Ok(None);
         };
         let amount = {
@@ -168,6 +174,7 @@ impl Service for Faucet {
             service: self,
             out: out.clone(),
             state,
+            log,
         });
         out.signal(json!({"faucet": {"amount": amount}})).await?;
         flow.redraw().await?;
@@ -198,6 +205,7 @@ struct FaucetFlow {
     service: Arc<Faucet>,
     out: Out,
     state: Arc<Mutex<State>>,
+    log: Log,
 }
 
 impl FaucetFlow {
@@ -215,7 +223,7 @@ impl FaucetFlow {
     }
 
     async fn redraw(&self) -> Result<(), String> {
-        let page = page(self.service.limits, &self.state().status);
+        let page = page(self.service.limits, &self.state().status, self.log.card());
         self.out.redraw(page).await
     }
 }
@@ -299,6 +307,7 @@ impl Flow for FaucetFlow {
         };
         match paid {
             Ok(()) => {
+                self.log.record(sats, Deed::Received);
                 let taken = self.service.taken().get(&wallet).copied().unwrap_or(sats);
                 let left = self.service.limits.wallet_sats.saturating_sub(taken);
                 self.set(Status::Paid(format!("Sent {sats} sats ({left} left).")));
@@ -313,7 +322,7 @@ impl Flow for FaucetFlow {
     }
 }
 
-fn page(limits: Limits, status: &Status) -> vtree::Node {
+fn page(limits: Limits, status: &Status, history: Option<vtree::Node>) -> vtree::Node {
     // The status is always a notice, so its type stays the same as it changes.
     let status = match status {
         Status::None => None,
@@ -324,17 +333,27 @@ fn page(limits: Limits, status: &Status) -> vtree::Node {
     };
     column("page")
         .children([
-            text("title").variant("h1").text("Faucet"),
-            row("ask").children([
-                input("amount")
-                    .variant("number")
-                    .label(format!("Sats (1-{})", limits.request_sats))
-                    .bind("faucet.amount"),
-                button("request")
-                    .variant("primary")
-                    .label("Request")
-                    .on_press(Handler::action("request")),
+            column("heading").gap("none").children([
+                text("title").variant("h1").text("Faucet"),
+                text("subtitle").variant("caption").text(format!(
+                    "Free test sats: up to {} a request, {} per wallet",
+                    limits.request_sats, limits.wallet_sats
+                )),
             ]),
+            card("ask")
+                .child(
+                    row("ask-row").align("end").wrap(true).children([
+                        input("amount")
+                            .variant("number")
+                            .label(format!("Sats (1-{})", limits.request_sats))
+                            .bind("faucet.amount"),
+                        button("request")
+                            .variant("primary")
+                            .label("Request")
+                            .on_press(Handler::action("request")),
+                    ]),
+                )
+                .children(status.map(|(variant, text)| notice("status").variant(variant).text(text))),
         ])
-        .children(status.map(|(variant, text)| notice("status").variant(variant).text(text)))
+        .children(history)
 }

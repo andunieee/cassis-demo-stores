@@ -39,3 +39,4 @@ serde_json = "1.0.151"
 sha2 = "0.10.9"
 tokio = { version = "1.53.1", features = ["io-util", "macros", "rt-multi-thread", "signal", "sync", "time", "net"] }
 tracing = "0.1.44"
+orangedb = "0.3.0"

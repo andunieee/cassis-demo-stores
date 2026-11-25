@@ -3,8 +3,9 @@
 //! number the wall will have; only the last wall is shown.
 
 use crate::cop::{request_payment, Flow, Out, Service, Sessions};
+use crate::history::{Deed, History, Log};
 use async_trait::async_trait;
-use hypereffect::vtree::{self, button, card, column, divider, input, list, notice, row, text};
+use hypereffect::vtree::{self, button, card, column, input, list, notice, row, text};
 use hypereffect::{json, Action, Handler};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -31,7 +32,7 @@ pub struct Wall {
 }
 
 impl Wall {
-    pub fn new(node: cassis_wallet::Node, path: PathBuf) -> Result<Arc<Self>, String> {
+    pub fn new(node: cassis_wallet::Node, path: PathBuf, history: History) -> Result<Arc<Self>, String> {
         let walls = match std::fs::read(&path) {
             Ok(bytes) => serde_json::from_slice::<Vec<Vec<String>>>(&bytes)
                 .ok()
@@ -45,7 +46,7 @@ impl Wall {
             path,
             walls: Mutex::new(walls),
             changed: broadcast::channel(16).0,
-            sessions: Default::default(),
+            sessions: Sessions::new(history, "wall"),
         }))
     }
 
@@ -132,7 +133,7 @@ impl Service for Wall {
         force_resume: bool,
         out: Out,
     ) -> Result<Option<Arc<dyn Flow>>, String> {
-        let Some(session) = self.sessions.open(session, force_resume) else {
+        let Some((session, log)) = self.sessions.open(session, force_resume) else {
             return Ok(None);
         };
         let text = session.lock().unwrap_or_else(|e| e.into_inner()).text.clone();
@@ -140,6 +141,7 @@ impl Service for Wall {
             service: self.clone(),
             out: out.clone(),
             session,
+            log,
         });
         out.signal(json!({"wall": {"text": text}})).await?;
         flow.redraw().await?;
@@ -169,6 +171,7 @@ struct WallFlow {
     service: Arc<Wall>,
     out: Out,
     session: Arc<Mutex<Session>>,
+    log: Log,
 }
 
 impl WallFlow {
@@ -180,7 +183,7 @@ impl WallFlow {
         let (number, messages) = self.service.last();
         let page = {
             let session = self.session.lock().unwrap_or_else(|e| e.into_inner());
-            page(number, &messages, &session.status)
+            page(number, &messages, &session.status, self.log.card())
         };
         self.out.redraw(page).await
     }
@@ -212,14 +215,21 @@ impl Flow for WallFlow {
                 // they were quoted it for, even if the wall moved on since.
                 let (number, messages) = self.service.last();
                 let sats = MESSAGE_SATS;
-                let flow = (self.service.clone(), self.out.clone(), self.session.clone());
+                let flow = (self.service.clone(), self.out.clone(), self.session.clone(), self.log.clone());
                 request_payment(
                     &self.service.node,
                     &self.out,
                     sats,
                     format!("Message {} on wall {number}", messages.len() + 1),
                     async move {
-                        let (service, out, session) = flow;
+                        let (service, out, session, log) = flow;
+                        log.record(
+                            sats,
+                            Deed::Posted {
+                                wall: number as u64,
+                                message: message.clone(),
+                            },
+                        );
                         {
                             let mut session = session.lock().unwrap_or_else(|e| e.into_inner());
                             session.text.clear();
@@ -236,14 +246,15 @@ impl Flow for WallFlow {
                 self.set(Status::None);
                 let walls = self.service.walls.lock().unwrap_or_else(|e| e.into_inner()).len();
                 let sats = wall_sats(walls);
-                let flow = (self.service.clone(), self.session.clone());
+                let flow = (self.service.clone(), self.session.clone(), self.log.clone());
                 request_payment(
                     &self.service.node,
                     &self.out,
                     sats,
                     format!("A new wall, number {}", walls + 1),
                     async move {
-                        let (service, session) = flow;
+                        let (service, session, log) = flow;
+                        log.record(sats, Deed::NewWall { wall: walls as u64 + 1 });
                         session.lock().unwrap_or_else(|e| e.into_inner()).status =
                             Status::Paid("New wall started.".into());
                         service.change(|walls| walls.push(vec![]));
@@ -260,43 +271,59 @@ impl Flow for WallFlow {
     }
 }
 
-fn page(number: usize, messages: &[String], status: &Status) -> vtree::Node {
+fn page(number: usize, messages: &[String], status: &Status, history: Option<vtree::Node>) -> vtree::Node {
     let status = match status {
         Status::None => None,
         Status::Paid(text) => Some(notice("status").variant("success").text(text.as_str())),
         Status::Error(text) => Some(notice("status").variant("failure").text(text.as_str())),
     };
-    column("page").children([
-        text("title").variant("h1").text("Wall of text"),
-        card("write")
-            .child(
-                input("text")
-                    .variant("multiline")
-                    .label(format!("Message (max {MAX_CHARS} chars)"))
-                    .bind("wall.text"),
-            )
-            .children(status)
-            .child(
-                row("write-actions").justify("end").child(
-                    button("post")
-                        .variant("primary")
-                        .label(format!("Post ({MESSAGE_SATS} sats)"))
-                        .on_press(Handler::action("post")),
+    column("page")
+        .children([
+            column("heading").gap("none").children([
+                text("title").variant("h1").text("Wall of text"),
+                text("subtitle")
+                    .variant("caption")
+                    .text(format!("{MESSAGE_SATS} sats a message, on wall {number}")),
+            ]),
+            card("write")
+                .title("Write")
+                .child(
+                    input("text")
+                        .variant("multiline")
+                        .label(format!("Message (max {MAX_CHARS} chars)"))
+                        .bind("wall.text"),
+                )
+                .children(status)
+                .child(
+                    row("write-actions").justify("end").child(
+                        button("post")
+                            .variant("primary")
+                            .label(format!("Post ({MESSAGE_SATS} sats)"))
+                            .on_press(Handler::action("post")),
+                    ),
                 ),
-            ),
-        card("wall").title(format!("Wall {number}")).child(
-            list("messages")
-                .empty("No messages yet.")
-                .children(messages.iter().enumerate().map(|(i, message)| {
-                    // Ids name the message, not its place, so a new one does not
-                    // rename the others.
-                    text(format!("message-{number}-{}", messages.len() - i)).text(message.as_str())
-                })),
-        ),
-        divider("divider"),
-        button("newwall")
-            .variant("plain")
-            .label(format!("New wall ({} sats)", wall_sats(number)))
-            .on_press(Handler::action("newwall")),
-    ])
+            card("wall")
+                .title(format!("Wall {number} ({})", messages.len()))
+                .child(
+                    list("messages")
+                        .empty("No messages yet.")
+                        .children(messages.iter().enumerate().map(|(i, message)| {
+                            // Ids name the message, not its place, so a new one does not
+                            // rename the others.
+                            text(format!("message-{number}-{}", messages.len() - i)).text(message.as_str())
+                        })),
+                )
+                .child(
+                    row("wall-actions").justify("between").wrap(true).children([
+                        text("newwall-hint")
+                            .variant("caption")
+                            .text("Start over on a fresh wall."),
+                        button("newwall")
+                            .variant("plain")
+                            .label(format!("New wall ({} sats)", wall_sats(number)))
+                            .on_press(Handler::action("newwall")),
+                    ]),
+                ),
+        ])
+        .children(history)
 }

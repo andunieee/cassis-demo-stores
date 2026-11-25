@@ -2743,6 +2743,7 @@ dependencies = [
  "hypereffect 0.7.0",
  "iroh 1.0.3",
  "openssl-sys",
+ "orangedb",
  "png",
  "qrcode",
  "rustls",
