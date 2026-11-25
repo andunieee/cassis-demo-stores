@@ -29,7 +29,8 @@ code{display:block;overflow-wrap:anywhere;font-size:.8rem;margin:.5rem 0}\
 .qr svg{width:12rem;height:12rem;background:#fff;border-radius:8px}\
 .muted{opacity:.7}\
 .canvas{display:block;width:100%;image-rendering:pixelated;border:1px solid var(--line);border-radius:8px}\
-.message{white-space:pre-wrap;overflow-wrap:anywhere}";
+.message{white-space:pre-wrap;overflow-wrap:anywhere}\
+.icon{margin-right:.4em}";
 
 pub fn escape(text: &str) -> String {
     text.replace('&', "&amp;")
@@ -57,9 +58,10 @@ async fn index(State(listings): State<Arc<Vec<Listing>>>) -> Html<String> {
     let mut body = String::from("<h1>Cassis demo stores</h1>");
     for listing in listings.iter() {
         body.push_str(&format!(
-            "<div class=\"card\"><h2>{name}</h2><p>{description}</p>\
+            "<div class=\"card\"><h2><span class=\"icon\">{icon}</span>{name}</h2><p>{description}</p>\
              <p><a href=\"{uri}\">Open</a> · <a href=\"/{slug}\">QR code</a></p>\
              <code>{uri}</code></div>",
+            icon = listing.service.icon(),
             name = listing.name,
             description = listing.description,
             uri = escape(&listing.uri),
@@ -86,12 +88,16 @@ async fn service(
         "<meta http-equiv=\"refresh\" content=\"15\">"
     };
     Ok(document(
-        &format!("<link rel=\"cassis-order\" href=\"{uri}\">{refresh}"),
         &format!(
-            "<p><a href=\"/\">All stores</a></p><h1>{name}</h1><p>{description}</p>\
+            "<link rel=\"cassis-order\" href=\"{uri}\"><link rel=\"icon\" href=\"{icon}\">{refresh}",
+            icon = escape(&crate::cop::icon(listing.service.icon())),
+        ),
+        &format!(
+            "<p><a href=\"/\">All stores</a></p><h1><span class=\"icon\">{icon}</span>{name}</h1><p>{description}</p>\
              {preview}\
              <div class=\"card qr\">{qr}</div>\
              <p><a href=\"{uri}\">Open</a></p><code>{uri}</code>",
+            icon = listing.service.icon(),
             name = listing.name,
             description = listing.description,
             qr = qr(&listing.uri),
