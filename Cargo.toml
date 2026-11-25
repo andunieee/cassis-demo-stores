@@ -25,6 +25,7 @@ cassis-core = { git = "https://github.com/andunieee/cassis", rev = "5a04b43034a4
 cassis-wallet = { git = "https://github.com/andunieee/cassis", rev = "5a04b43034a4335311afc3954ef9ea4c1bdeca08", default-features = false }
 clap = { version = "4.6.6", features = ["derive", "env"] }
 base64 = "0.22.1"
+getrandom = "0.3.4"
 hyperb-cassis-wallet = { git = "https://github.com/andunieee/cassis", rev = "5a04b43034a4335311afc3954ef9ea4c1bdeca08" }
 hypereffect = "0.7.0"
 # `hyperb-cassis-wallet` is still on hypereffect 0.6.

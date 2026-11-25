@@ -3,6 +3,7 @@
 //! node, a Cassis wallet home, is the payee of all of them.
 
 mod admin;
+mod casino;
 mod cop;
 mod faucet;
 mod history;
@@ -99,12 +100,14 @@ async fn run(cli: Cli) -> Result<(), String> {
             request_sats: cli.faucet_request,
             wallet_sats: cli.faucet_wallet,
         },
-        history,
+        history.clone(),
     )?;
-    let services: [(&str, Arc<dyn cop::Service>); 3] = [
+    let casino = casino::Casino::new(node.clone(), cli.data.join("casino.json"), history)?;
+    let services: [(&str, Arc<dyn cop::Service>); 4] = [
         ("pixels", pixels.clone()),
         ("wall", wall.clone()),
         ("faucet", faucet.clone()),
+        ("casino", casino),
     ];
     let mut listings = Vec::new();
     let mut endpoints = Vec::new();

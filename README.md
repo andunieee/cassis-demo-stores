@@ -1,7 +1,7 @@
 # cassis-demo-stores
 
 Demo storefronts for the [Cassis Order Protocol](https://github.com/andunieee/cassis):
-a pixel board, a wall of numbers, and a faucet, each sold over its own iroh
+a pixel board, a wall of numbers, a faucet, and a casino, each sold over its own iroh
 endpoint, plus a web page that links to them.
 
 ## Run

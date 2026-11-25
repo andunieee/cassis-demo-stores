@@ -2738,6 +2738,7 @@ dependencies = [
  "cassis-core",
  "cassis-wallet",
  "clap",
+ "getrandom 0.3.4",
  "hyperb-cassis-wallet",
  "hypereffect 0.6.3",
  "hypereffect 0.7.0",

@@ -31,6 +31,10 @@ pub mod schema {
         NewWall { wall: u64 },
         /// Sats the faucet sent.
         Received,
+        /// A casino ticket, and the prize it won, or 0.
+        Played { won: u64 },
+        /// A casino prize that was paid.
+        Won,
     }
 
     #[entity]
@@ -140,7 +144,7 @@ impl Log {
                 entries.iter().map(|entry| {
                     let id = format!("entry-{}", entry.id.0);
                     let sats = match entry.deed {
-                        Deed::Received => badge(format!("{id}-sats"))
+                        Deed::Received | Deed::Won => badge(format!("{id}-sats"))
                             .variant("success")
                             .text(format!("+{} sats", entry.sats)),
                         _ => badge(format!("{id}-sats")).text(format!("{} sats", entry.sats)),
@@ -174,6 +178,9 @@ impl Deed {
             Deed::Posted { wall, message } => format!("Wrote on wall {wall}: “{message}”"),
             Deed::NewWall { wall } => format!("Started wall {wall}"),
             Deed::Received => "Received from the faucet".into(),
+            Deed::Played { won: 0 } => "Played a casino ticket, lost".into(),
+            Deed::Played { won } => format!("Played a casino ticket, won {won} sats"),
+            Deed::Won => "Received a casino prize".into(),
         }
     }
 }
