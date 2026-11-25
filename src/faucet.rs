@@ -144,6 +144,10 @@ impl Service for Faucet {
         "Free test sats"
     }
 
+    fn icon(&self) -> &'static str {
+        "🚰"
+    }
+
     fn preview(&self) -> String {
         let wallets = self.wallets();
         let total: u64 = wallets.iter().map(|(_, sats)| sats).sum();

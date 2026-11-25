@@ -63,6 +63,8 @@ impl<T: Default> Sessions<T> {
 pub trait Service: Send + Sync + 'static {
     fn name(&self) -> &'static str;
     fn description(&self) -> &'static str;
+    /// An emoji that stands for the service, sent as its icon.
+    fn icon(&self) -> &'static str;
     /// What the service's web page shows of what it holds, as HTML.
     fn preview(&self) -> String {
         String::new()
@@ -210,6 +212,16 @@ pub fn uri(endpoint: &Endpoint, name: &str) -> String {
     uri
 }
 
+/// A `data:` URL of an SVG icon that shows `emoji`.
+pub fn icon(emoji: &str) -> String {
+    let svg = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\">\
+         <text x=\"50\" y=\"50\" font-size=\"80\" text-anchor=\"middle\" \
+         dominant-baseline=\"central\">{emoji}</text></svg>"
+    );
+    format!("data:image/svg+xml,{}", encode(&svg))
+}
+
 pub fn encode(text: &str) -> String {
     text.bytes()
         .map(|byte| match byte {
@@ -235,7 +247,8 @@ pub async fn serve(endpoint: Endpoint, service: Arc<dyn Service>) {
             };
             let metadata = Metadata::new()
                 .name(service.name())
-                .description(service.description());
+                .description(service.description())
+                .icon(icon(service.icon()));
             let out = Out::with_metadata(send, metadata);
             if let Err(error) = flow(service.clone(), out.clone(), recv).await {
                 warn!("{} flow ended: {error}", service.name());

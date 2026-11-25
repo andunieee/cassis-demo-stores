@@ -169,6 +169,10 @@ impl Service for Pixels {
         "50 sats a pixel"
     }
 
+    fn icon(&self) -> &'static str {
+        "🎨"
+    }
+
     fn preview(&self) -> String {
         format!("<img class=\"canvas\" src=\"{}\" alt=\"The pixel wall\">", self.image())
     }

@@ -285,7 +285,10 @@ async fn session(
     mut lines: Lines<BufReader<RecvStream>>,
     result: Option<Result<String, String>>,
 ) -> Result<(), String> {
-    let metadata = Metadata::new().name("Demo stores admin");
+    let metadata = Metadata::new()
+        .name("Demo stores admin")
+        .description("Moderate the stores, the faucet and the wallets that get paid")
+        .icon(crate::cop::icon("🛠️"));
     out.send(ServerMessage::from(metadata).to_line()).await?;
     let session = Arc::new(Session {
         admin: admin.clone(),

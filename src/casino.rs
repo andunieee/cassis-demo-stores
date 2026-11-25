@@ -136,6 +136,10 @@ impl Service for Casino {
         "100 sats a ticket, 10% chance to win 90% of the pot"
     }
 
+    fn icon(&self) -> &'static str {
+        "🎰"
+    }
+
     fn preview(&self) -> String {
         let saved = self.saved();
         format!(

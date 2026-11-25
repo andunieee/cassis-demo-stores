@@ -112,6 +112,10 @@ impl Service for Wall {
         "50 sats a message"
     }
 
+    fn icon(&self) -> &'static str {
+        "📜"
+    }
+
     fn preview(&self) -> String {
         let (number, messages) = self.last();
         let mut html = format!("<h2>Wall {number}</h2>");
