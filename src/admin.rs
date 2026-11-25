@@ -253,21 +253,6 @@ async fn hello(lines: &mut Lines<BufReader<RecvStream>>) -> Option<HashMap<Strin
     }
 }
 
-fn to_action_06(action: &Action) -> hypereffect_06::Action {
-    hypereffect_06::Action {
-        name: action.name.clone(),
-        payload: action.payload.clone(),
-        signals: action.signals.clone(),
-    }
-}
-
-fn from_node_06(node: hypereffect_06::vtree::Node) -> vtree::Node {
-    let element: hypereffect::Element =
-        serde_json::from_value(serde_json::to_value(node.element).expect("element serializes"))
-            .expect("element deserializes");
-    vtree::Node::from(element).children(node.children.into_iter().map(from_node_06))
-}
-
 /// What a session shows besides what the server holds.
 #[derive(Default)]
 struct View {
@@ -361,7 +346,7 @@ impl Session {
     }
 
     async fn action(&self, action: Action) -> Result<(), String> {
-        if let Some(handled) = self.admin.wallets.act(&to_action_06(&action)) {
+        if let Some(handled) = self.admin.wallets.act(&action) {
             if let Some(patch) = handled.patch {
                 self.out.signal(patch).await?;
             }
@@ -478,7 +463,7 @@ impl Session {
                 .children(self.faucet_tab(confirm == Some(Wipe::Faucet))),
             tab("tab/wallets")
                 .label("Wallets")
-                .children(self.admin.wallets.view().into_iter().map(from_node_06)),
+                .children(self.admin.wallets.view()),
             tab("tab/operators").label("Operators").children(self.operators_tab()),
         ]))
     }
