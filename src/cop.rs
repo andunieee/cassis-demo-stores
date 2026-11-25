@@ -8,7 +8,7 @@ use cassis_wallet::db::{InvoiceHash, InvoiceState};
 use cassis_wallet::Node;
 use hypereffect::message::{encode_line, parse_line};
 use hypereffect::vtree;
-use hypereffect::{json, Action, Metadata, RendererMessage, ServerMessage};
+use hypereffect::{json, Action, Close, Map, Metadata, RendererMessage, ServerMessage, Value};
 use iroh::endpoint::{presets, SendStream};
 use iroh::{Endpoint, SecretKey};
 use std::collections::HashMap;
@@ -24,7 +24,28 @@ pub const ALPN: &[u8] = b"cassis-order";
 /// The alpn of the admin interface, `hyperb://<id>/admin` (see the hyperb
 /// spec, section 3).
 pub const ADMIN_ALPN: &[u8] = b"hyperb/0/admin";
+pub const SESSION_NOT_FOUND: &str = "session_not_found";
 const INVOICE_TTL_SECS: u64 = 15 * 60;
+
+/// The sessions of a service, kept by the client's `session` token.
+pub struct Sessions<T>(Mutex<HashMap<String, Arc<Mutex<T>>>>);
+
+impl<T> Default for Sessions<T> {
+    fn default() -> Self {
+        Self(Mutex::new(HashMap::new()))
+    }
+}
+
+impl<T: Default> Sessions<T> {
+    /// Find `session`, or start a new one unless `force_resume` asked not to.
+    pub fn open(&self, session: String, force_resume: bool) -> Option<Arc<Mutex<T>>> {
+        let mut sessions = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        match force_resume {
+            true => sessions.get(&session).cloned(),
+            false => Some(sessions.entry(session).or_default().clone()),
+        }
+    }
+}
 
 /// A service: what a flow on its endpoint shows and does.
 #[async_trait]
@@ -35,9 +56,14 @@ pub trait Service: Send + Sync + 'static {
     fn preview(&self) -> String {
         String::new()
     }
-    /// A flow was opened: draw its first page. `session` is the one the
-    /// client sent in its `hello`.
-    async fn open(self: Arc<Self>, session: String, out: Out) -> Result<Arc<dyn Flow>, String>;
+    /// A flow was opened: draw its first page, or return `None` when
+    /// `force_resume` asked for a `session` the service does not have.
+    async fn open(
+        self: Arc<Self>,
+        session: String,
+        force_resume: bool,
+        out: Out,
+    ) -> Result<Option<Arc<dyn Flow>>, String>;
 }
 
 /// One open flow of a service.
@@ -47,7 +73,7 @@ pub trait Flow: Send + Sync {
     /// The client answered an `invoicerequest` with `invoice`. Nothing is
     /// asked of a client unless a flow sends one, so by default an
     /// `invoice` is unsolicited and ignored.
-    async fn invoice(&self, _invoice: hypereffect::Value) -> Result<(), String> {
+    async fn invoice(&self, _invoice: Value) -> Result<(), String> {
         warn!("ignoring an unsolicited invoice");
         Ok(())
     }
@@ -55,6 +81,9 @@ pub trait Flow: Send + Sync {
 
 struct Stream {
     send: SendStream,
+    /// Sent before the first message of an opened flow, and dropped if the
+    /// flow closes right away with `session_not_found`.
+    pending: String,
     /// The page the client was last sent.
     page: Option<vtree::Node>,
 }
@@ -68,17 +97,31 @@ pub struct Out {
 
 impl Out {
     pub fn new(send: SendStream) -> Self {
+        Self::with_pending(send, String::new())
+    }
+
+    pub fn with_metadata(send: SendStream, metadata: Metadata) -> Self {
+        Self::with_pending(send, ServerMessage::from(metadata).to_line())
+    }
+
+    fn with_pending(send: SendStream, pending: String) -> Self {
         Self {
-            stream: Arc::new(AsyncMutex::new(Stream { send, page: None })),
+            stream: Arc::new(AsyncMutex::new(Stream {
+                send,
+                pending,
+                page: None,
+            })),
             tasks: Default::default(),
         }
     }
 
     pub async fn send(&self, lines: String) -> Result<(), String> {
         let mut stream = self.stream.lock().await;
+        let mut out = std::mem::take(&mut stream.pending);
+        out.push_str(&lines);
         stream
             .send
-            .write_all(lines.as_bytes())
+            .write_all(out.as_bytes())
             .await
             .map_err(|e| format!("send: {e}"))
     }
@@ -90,7 +133,8 @@ impl Out {
             Some(old) => vtree::diff(old, &new),
             None => vtree::render(&new),
         };
-        let lines: String = messages.iter().map(ServerMessage::to_line).collect();
+        let mut lines = std::mem::take(&mut stream.pending);
+        lines.extend(messages.iter().map(ServerMessage::to_line));
         stream
             .send
             .write_all(lines.as_bytes())
@@ -100,8 +144,22 @@ impl Out {
         Ok(())
     }
 
-    pub async fn signal(&self, patch: hypereffect::Value) -> Result<(), String> {
+    pub async fn signal(&self, patch: Value) -> Result<(), String> {
         self.send(ServerMessage::signal(patch).to_line()).await
+    }
+
+    /// End the flow with a hypereffect `close` message and finish the stream.
+    pub async fn close(&self, close: Close) -> Result<(), String> {
+        let mut stream = self.stream.lock().await;
+        stream.pending.clear();
+        stream
+            .send
+            .write_all(close.to_line().as_bytes())
+            .await
+            .map_err(|e| format!("send: {e}"))?;
+        let _ = stream.send.finish();
+        let _ = tokio::time::timeout(Duration::from_secs(2), stream.send.stopped()).await;
+        Ok(())
     }
 
     /// Run `task` until the flow ends.
@@ -164,7 +222,10 @@ pub async fn serve(endpoint: Endpoint, service: Arc<dyn Service>) {
             let Ok((send, recv)) = connection.accept_bi().await else {
                 return;
             };
-            let out = Out::new(send);
+            let metadata = Metadata::new()
+                .name(service.name())
+                .description(service.description());
+            let out = Out::with_metadata(send, metadata);
             if let Err(error) = flow(service.clone(), out.clone(), recv).await {
                 warn!("{} flow ended: {error}", service.name());
             }
@@ -174,26 +235,38 @@ pub async fn serve(endpoint: Endpoint, service: Arc<dyn Service>) {
     }
 }
 
+fn parse_hello(hello: &Map<String, Value>) -> Result<(String, bool), String> {
+    let session = hello
+        .get("session")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "the hello has no session".to_string())?
+        .to_string();
+    let force_resume = hello
+        .get("force_resume")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    Ok((session, force_resume))
+}
+
 async fn flow(
     service: Arc<dyn Service>,
     out: Out,
     recv: iroh::endpoint::RecvStream,
 ) -> Result<(), String> {
     let mut lines = BufReader::new(recv).lines();
-    let params: HashMap<String, String> = match lines.next_line().await.map_err(|e| e.to_string())? {
+    let (session, force_resume) = match lines.next_line().await.map_err(|e| e.to_string())? {
         Some(line) => match RendererMessage::parse(&line) {
-            Ok(RendererMessage::Hello { params }) => params.into_iter().collect(),
+            Ok(RendererMessage::Hello(hello)) => parse_hello(&hello)?,
             _ => return Err("the flow does not start with a hello".into()),
         },
         None => return Ok(()),
     };
-    let session = params.get("session").cloned().unwrap_or_default();
+    let Some(flow) = service.clone().open(session, force_resume, out.clone()).await? else {
+        info!("{}: session not found", service.name());
+        return out.close(Close::new(SESSION_NOT_FOUND)).await;
+    };
     info!("{} flow opened", service.name());
-    let metadata = Metadata::new()
-        .name(service.name())
-        .description(service.description());
-    out.send(ServerMessage::from(metadata).to_line()).await?;
-    let flow = service.clone().open(session, out.clone()).await?;
     while let Some(line) = lines.next_line().await.map_err(|e| e.to_string())? {
         if line.is_empty() {
             continue;
@@ -206,7 +279,7 @@ async fn flow(
         }
         match RendererMessage::parse(&line) {
             Ok(RendererMessage::Action(action)) => flow.action(action).await?,
-            Ok(RendererMessage::Hello { .. }) => warn!("ignoring a second hello"),
+            Ok(RendererMessage::Hello(_)) => warn!("ignoring a second hello"),
             Err(error) => warn!("ignoring message: {error}"),
         }
     }
@@ -263,4 +336,55 @@ pub async fn request_payment(
         }
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hello_session_and_force_resume() {
+        let parse = |line: &str| match RendererMessage::parse(line).unwrap() {
+            RendererMessage::Hello(hello) => parse_hello(&hello),
+            _ => panic!("not a hello"),
+        };
+
+        assert_eq!(
+            parse(r#"hello {"session":"f1K9xQ2v8Tn4LmZp7Rb3wq"}"#),
+            Ok(("f1K9xQ2v8Tn4LmZp7Rb3wq".into(), false))
+        );
+        assert_eq!(
+            parse(
+                r#"hello {"params":{"name":"Wall"},"session":"f1K9xQ2v8Tn4LmZp7Rb3wq","force_resume":true}"#
+            ),
+            Ok(("f1K9xQ2v8Tn4LmZp7Rb3wq".into(), true))
+        );
+        assert_eq!(
+            parse(r#"hello {"session":"f1K9xQ2v8Tn4LmZp7Rb3wq","force_resume":"yes"}"#),
+            Ok(("f1K9xQ2v8Tn4LmZp7Rb3wq".into(), false))
+        );
+        assert!(parse(r#"hello {}"#).is_err());
+        assert!(parse(r#"hello {"session":""}"#).is_err());
+        assert!(parse(r#"hello {"params":{"session":"f1K9xQ2v8Tn4LmZp7Rb3wq"}}"#).is_err());
+    }
+
+    #[test]
+    fn sessions_resume_or_fail_when_forced() {
+        let sessions = Sessions::<u32>::default();
+        assert!(sessions.open("unknown".into(), true).is_none());
+
+        let first = sessions.open("abc".into(), false).unwrap();
+        *first.lock().unwrap() = 42;
+
+        let resumed = sessions.open("abc".into(), true).unwrap();
+        assert_eq!(*resumed.lock().unwrap(), 42);
+
+        let reopened = sessions.open("abc".into(), false).unwrap();
+        assert_eq!(*reopened.lock().unwrap(), 42);
+
+        assert_eq!(
+            Close::new(SESSION_NOT_FOUND).to_line(),
+            "close {\"reason\":\"session_not_found\"}\n"
+        );
+    }
 }

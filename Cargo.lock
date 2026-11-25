@@ -2739,7 +2739,8 @@ dependencies = [
  "cassis-wallet",
  "clap",
  "hyperb-cassis-wallet",
- "hypereffect",
+ "hypereffect 0.6.3",
+ "hypereffect 0.7.0",
  "iroh 1.0.3",
  "openssl-sys",
  "png",
@@ -2856,7 +2857,7 @@ dependencies = [
  "cassis-networks",
  "clap",
  "futures",
- "hypereffect",
+ "hypereffect 0.6.3",
  "iroh 1.0.3",
  "iroh-base 1.4.1",
  "lowercase-hex",
@@ -6214,7 +6215,7 @@ source = "git+https://github.com/andunieee/cassis?rev=5a04b43034a4335311afc3954e
 dependencies = [
  "cassis-core",
  "cassis-networks",
- "hypereffect",
+ "hypereffect 0.6.3",
  "serde",
  "tokio",
  "toml 0.8.23",
@@ -6227,6 +6228,17 @@ name = "hypereffect"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51fed57ea32950c8b667334c4cc48241e4f7d246730f19f25b60856e6caf7a43"
+dependencies = [
+ "cel 0.15.0",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "hypereffect"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "612c20ff6ff82b06426891d305ccd6808581bd740cc99583efeee7d2cdf80ec4"
 dependencies = [
  "cel 0.15.0",
  "serde",

@@ -224,7 +224,7 @@ async fn connect(admin: Arc<Admin>, connection: Connection) {
     let mut result = None;
     if !admin.operators.has(&key) {
         match params.get("setup").map(|secret| admin.claim(&key, secret)) {
-            Some(Ok(true)) => result = Some(Ok("This key is paired as an operator now.".to_string())),
+            Some(Ok(true)) => result = Some(Ok("Operator paired.".to_string())),
             Some(Err(error)) => result = Some(Err(error)),
             _ => {
                 return connection
@@ -244,9 +244,28 @@ async fn connect(admin: Arc<Admin>, connection: Connection) {
 async fn hello(lines: &mut Lines<BufReader<RecvStream>>) -> Option<HashMap<String, String>> {
     let line = lines.next_line().await.ok()??;
     match RendererMessage::parse(&line) {
-        Ok(RendererMessage::Hello { params }) => Some(params.into_iter().collect()),
+        Ok(RendererMessage::Hello(body)) => Some(
+            body.get("params")
+                .and_then(|p| serde_json::from_value(p.clone()).ok())
+                .unwrap_or_default(),
+        ),
         _ => None,
     }
+}
+
+fn to_action_06(action: &Action) -> hypereffect_06::Action {
+    hypereffect_06::Action {
+        name: action.name.clone(),
+        payload: action.payload.clone(),
+        signals: action.signals.clone(),
+    }
+}
+
+fn from_node_06(node: hypereffect_06::vtree::Node) -> vtree::Node {
+    let element: hypereffect::Element =
+        serde_json::from_value(serde_json::to_value(node.element).expect("element serializes"))
+            .expect("element deserializes");
+    vtree::Node::from(element).children(node.children.into_iter().map(from_node_06))
 }
 
 /// What a session shows besides what the server holds.
@@ -281,9 +300,7 @@ async fn session(
     mut lines: Lines<BufReader<RecvStream>>,
     result: Option<Result<String, String>>,
 ) -> Result<(), String> {
-    let metadata = Metadata::new()
-        .name("Demo stores admin")
-        .description("Moderate the wall and the picture, and manage the wallets");
+    let metadata = Metadata::new().name("Demo stores admin");
     out.send(ServerMessage::from(metadata).to_line()).await?;
     let session = Arc::new(Session {
         admin: admin.clone(),
@@ -322,7 +339,7 @@ async fn session(
         }
         match RendererMessage::parse(&line) {
             Ok(RendererMessage::Action(action)) => session.action(action).await?,
-            Ok(RendererMessage::Hello { .. }) => warn!("ignoring a second hello"),
+            Ok(RendererMessage::Hello(_)) => warn!("ignoring a second hello"),
             Err(error) => warn!("ignoring message: {error}"),
         }
     }
@@ -344,7 +361,7 @@ impl Session {
     }
 
     async fn action(&self, action: Action) -> Result<(), String> {
-        if let Some(handled) = self.admin.wallets.act(&action) {
+        if let Some(handled) = self.admin.wallets.act(&to_action_06(&action)) {
             if let Some(patch) = handled.patch {
                 self.out.signal(patch).await?;
             }
@@ -377,8 +394,8 @@ impl Session {
                 };
                 let text = payload.and_then(|p| p["text"].as_str()).unwrap_or_default();
                 match self.admin.wall.remove(wall as usize, index as usize, text) {
-                    true => Ok(Some("Message taken off the wall".into())),
-                    false => Err("That message is not on the wall anymore".into()),
+                    true => Ok(Some("Message deleted.".into())),
+                    false => Err("Message not found.".into()),
                 }
             }
             "wall.reset" => self.ask(Wipe::Wall),
@@ -387,8 +404,8 @@ impl Session {
             "faucet.forget" => {
                 let wallet = payload.and_then(|p| p["wallet"].as_str()).unwrap_or_default();
                 match self.admin.faucet.forget(wallet) {
-                    true => Ok(Some(format!("{} may take from the faucet again", short(wallet)))),
-                    false => Err("That wallet has taken nothing".into()),
+                    true => Ok(Some(format!("Reset {}.", short(wallet)))),
+                    false => Err("Wallet not found.".into()),
                 }
             }
             "operator.add" => {
@@ -396,17 +413,17 @@ impl Session {
                 match self.admin.operators.add(key) {
                     Ok(true) => {
                         let key = key.trim().to_lowercase();
-                        Ok(Some(format!("{} may open this interface now", short(&key))))
+                        Ok(Some(format!("Added {}.", short(&key))))
                     }
-                    Ok(false) => Err("That key is an operator already".into()),
+                    Ok(false) => Err("Already an operator.".into()),
                     Err(error) => Err(error),
                 }
             }
             "operator.remove" => {
                 let key = payload.and_then(|p| p["key"].as_str()).unwrap_or_default();
                 match self.admin.operators.remove(key, &self.key) {
-                    Ok(true) => Ok(Some(format!("{} may no longer open this interface", short(key)))),
-                    Ok(false) => Err("That key is not an operator".into()),
+                    Ok(true) => Ok(Some(format!("Removed {}.", short(key)))),
+                    Ok(false) => Err("Not an operator.".into()),
                     Err(error) => Err(error),
                 }
             }
@@ -417,17 +434,17 @@ impl Session {
             "wipe.confirm" => match self.view().confirm.take() {
                 Some(Wipe::Wall) => {
                     self.admin.wall.clear();
-                    Ok(Some("The wall is empty".into()))
+                    Ok(Some("Wall reset.".into()))
                 }
                 Some(Wipe::Pixels) => {
                     self.admin.pixels.reset();
-                    Ok(Some("The picture is blank".into()))
+                    Ok(Some("Canvas reset.".into()))
                 }
                 Some(Wipe::Faucet) => {
                     self.admin.faucet.reset();
-                    Ok(Some("Every wallet may take from the faucet again".into()))
+                    Ok(Some("Faucet reset.".into()))
                 }
-                None => Err("Nothing to confirm".into()),
+                None => Err("Nothing to confirm.".into()),
             },
             other => Err(format!("unknown action {other}")),
         }
@@ -459,7 +476,9 @@ impl Session {
             tab("tab/faucet")
                 .label("Faucet")
                 .children(self.faucet_tab(confirm == Some(Wipe::Faucet))),
-            tab("tab/wallets").label("Wallets").children(self.admin.wallets.view()),
+            tab("tab/wallets")
+                .label("Wallets")
+                .children(self.admin.wallets.view().into_iter().map(from_node_06)),
             tab("tab/operators").label("Operators").children(self.operators_tab()),
         ]))
     }
@@ -467,7 +486,7 @@ impl Session {
     fn wall_tab(&self, confirming: bool) -> Vec<vtree::Node> {
         let (number, messages) = self.admin.wall.messages();
         let list = list("wall/messages")
-            .empty("Nothing written on this wall yet.")
+            .empty("No messages.")
             .children(messages.iter().enumerate().rev().map(|(index, message)| {
                 let id = format!("wall/{number}/{index}");
                 row(id.clone()).children([
@@ -482,57 +501,47 @@ impl Session {
             }));
         vec![
             text("wall/blurb").variant("caption").text(format!(
-                "Wall {number}, {} message(s), newest first.",
+                "Wall {number} ({})",
                 messages.len()
             )),
             list,
-            wipe("wall", "Reset the wall", "This takes every message off the wall.", confirming),
+            wipe("wall", "Reset wall", confirming),
         ]
     }
 
     fn faucet_tab(&self, confirming: bool) -> Vec<vtree::Node> {
         let wallets = self.admin.faucet.wallets();
-        let limits = self.admin.faucet.limits();
         let total: u64 = wallets.iter().map(|(_, sats)| sats).sum();
         vec![
-            text("faucet/blurb").variant("caption").text(format!(
-                "{total} sats given to {} wallet(s). At most {} per request and {} per wallet.",
-                wallets.len(),
-                limits.request_sats,
-                limits.wallet_sats
-            )),
+            text("faucet/blurb")
+                .variant("caption")
+                .text(format!("{total} sats given to {} wallet(s)", wallets.len())),
             list("faucet/wallets")
-                .empty("No wallet has taken anything yet.")
+                .empty("None.")
                 .children(wallets.iter().map(|(wallet, sats)| {
                     let id = format!("faucet/{wallet}");
                     row(id.clone()).children([
-                        text(format!("{id}/text")).text(format!("{} took {sats} sats", short(wallet))),
+                        text(format!("{id}/text")).text(format!("{}: {sats} sats", short(wallet))),
                         button(format!("{id}/forget"))
                             .variant("plain")
-                            .label("Let it take again")
+                            .label("Reset")
                             .on_press(Handler::action("faucet.forget").payload(json!({"wallet": wallet}))),
                     ])
                 })),
-            wipe(
-                "faucet",
-                "Reset the faucet",
-                "Every wallet may take its full limit again.",
-                confirming,
-            ),
+            wipe("faucet", "Reset faucet", confirming),
         ]
     }
 
     fn pixels_tab(&self, confirming: bool) -> Vec<vtree::Node> {
         vec![
-            text("pixels/blurb").variant("caption").text(format!(
-                "{} pixel(s) painted.",
-                self.admin.pixels.painted()
-            )),
+            text("pixels/blurb")
+                .variant("caption")
+                .text(format!("{} painted", self.admin.pixels.painted())),
             image("pixels/canvas")
                 .src(self.admin.pixels.image())
-                .alt("The pixel wall")
+                .alt("Pixel wall")
                 .variant("full"),
-            wipe("pixels", "Reset the picture", "This paints every pixel blank.", confirming),
+            wipe("pixels", "Reset canvas", confirming),
         ]
     }
 
@@ -556,14 +565,8 @@ impl Session {
             row
         });
         vec![
-            text("operators/blurb").variant("caption").text(format!(
-                "These {} iroh key(s) may open this interface. Yours is {}; you cannot remove it. \
-                 Only add a key you trust: it has all of this page's powers.",
-                keys.len(),
-                self.key
-            )),
-            list("operators/list").empty("No operators. Restart to print a pairing link.").children(rows),
-            card("operators/add").title("Let another key in").children([
+            list("operators/list").empty("No operators.").children(rows),
+            card("operators/add").title("Add operator").children([
                 input("key")
                     .label("iroh key")
                     .placeholder("64 hex characters")
@@ -571,7 +574,7 @@ impl Session {
                 row("operators/add-actions").justify("end").child(
                     button("operator/add")
                         .variant("primary")
-                        .label("Add operator")
+                        .label("Add")
                         .on_press(Handler::action("operator.add")),
                 ),
             ]),
@@ -580,22 +583,19 @@ impl Session {
 }
 
 /// A button that wipes something, after asking.
-fn wipe(what: &str, label: &str, warning: &str, confirming: bool) -> vtree::Node {
+fn wipe(what: &str, label: &str, confirming: bool) -> vtree::Node {
     match confirming {
-        true => card(format!("{what}/wipe")).children([
-            notice(format!("{what}/wipe/warning"))
-                .variant("warning")
-                .text(format!("{warning} It cannot be undone.")),
+        true => card(format!("{what}/wipe")).child(
             row(format!("{what}/wipe/buttons")).children([
                 button(format!("{what}/wipe/confirm"))
                     .variant("failure")
-                    .label(label)
+                    .label("Confirm")
                     .on_press(Handler::action("wipe.confirm")),
                 button(format!("{what}/wipe/cancel"))
-                    .label("Keep it")
+                    .label("Cancel")
                     .on_press(Handler::action("wipe.cancel")),
             ]),
-        ]),
+        ),
         false => card(format!("{what}/wipe")).child(
             button(format!("{what}/wipe/ask"))
                 .variant("failure")

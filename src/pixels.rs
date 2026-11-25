@@ -1,13 +1,12 @@
 //! The pixel wall: a small image everyone paints on. A payer picks pixels
 //! by column and row and a color, then pays [`PIXEL_SATS`] for each one.
 
-use crate::cop::{request_payment, Flow, Out, Service};
+use crate::cop::{request_payment, Flow, Out, Service, Sessions};
 use async_trait::async_trait;
 use base64::Engine;
 use hypereffect::vtree::{self, button, card, column, image, input, list, notice, row, select, text};
 use hypereffect::{json, Action, Handler};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
@@ -94,7 +93,7 @@ pub struct Pixels {
     canvas: Mutex<Canvas>,
     changed: broadcast::Sender<()>,
     /// Carts by session, so a reopened flow finds its pixels again.
-    carts: Mutex<HashMap<String, Arc<Mutex<Cart>>>>,
+    carts: Sessions<Cart>,
 }
 
 impl Pixels {
@@ -166,21 +165,22 @@ impl Service for Pixels {
     }
 
     fn description(&self) -> &'static str {
-        "A 30x20 image painted pixel by pixel, 50 sats each"
+        "50 sats a pixel"
     }
 
     fn preview(&self) -> String {
         format!("<img class=\"canvas\" src=\"{}\" alt=\"The pixel wall\">", self.image())
     }
 
-    async fn open(self: Arc<Self>, session: String, out: Out) -> Result<Arc<dyn Flow>, String> {
-        let cart = self
-            .carts
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .entry(session)
-            .or_default()
-            .clone();
+    async fn open(
+        self: Arc<Self>,
+        session: String,
+        force_resume: bool,
+        out: Out,
+    ) -> Result<Option<Arc<dyn Flow>>, String> {
+        let Some(cart) = self.carts.open(session, force_resume) else {
+            return Ok(None);
+        };
         let flow = Arc::new(PixelFlow {
             service: self.clone(),
             out: out.clone(),
@@ -199,7 +199,7 @@ impl Service for Pixels {
                 }
             }
         });
-        Ok(flow)
+        Ok(Some(flow))
     }
 }
 
@@ -249,9 +249,9 @@ impl PixelFlow {
 
     fn pick(&self, action: &Action) -> Result<Pixel, String> {
         let col = position(action.signal("paint.col"), WIDTH)
-            .ok_or(format!("The column must be a number from 1 to {WIDTH}."))?;
+            .ok_or(format!("Column: 1 to {WIDTH}."))?;
         let row = position(action.signal("paint.row"), HEIGHT)
-            .ok_or(format!("The row must be a number from 1 to {HEIGHT}."))?;
+            .ok_or(format!("Row: 1 to {HEIGHT}."))?;
         let signal = |path| action.signal(path).and_then(|v| v.as_str()).unwrap_or_default();
         let custom = signal("paint.custom");
         let color = if custom.trim().is_empty() {
@@ -259,7 +259,7 @@ impl PixelFlow {
         } else {
             parse_color(custom)
         }
-        .ok_or("The color must look like #rrggbb.")?;
+        .ok_or("Color: #rrggbb.")?;
         Ok(Pixel { col, row, color })
     }
 }
@@ -302,14 +302,17 @@ impl Flow for PixelFlow {
                 let flow = (self.service.clone(), self.out.clone(), self.cart.clone());
                 request_payment(&self.service.node, &self.out, sats, memo, async move {
                     let (service, out, cart) = flow;
-                    service.paint(&pixels);
-                    info!("{} pixel(s) painted", pixels.len());
-                    let flow = PixelFlow { service, out, cart };
+                    let flow = PixelFlow {
+                        service: service.clone(),
+                        out,
+                        cart,
+                    };
                     flow.update(|cart| {
                         cart.pixels.retain(|p| !pixels.contains(p));
-                        cart.paid = Some(format!("Paid, thank you! {} pixel(s) painted.", pixels.len()));
+                        cart.paid = Some(format!("{} pixel(s) painted.", pixels.len()));
                     });
-                    let _ = flow.redraw().await;
+                    service.paint(&pixels);
+                    info!("{} pixel(s) painted", pixels.len());
                 })
                 .await?;
                 return Ok(());
@@ -325,15 +328,11 @@ fn page(canvas: &str, cart: &Cart) -> vtree::Node {
     pixels.sort_by_key(|p| (p.row, p.col));
     column("page").children([
         text("title").variant("h1").text("Pixel wall"),
-        text("blurb").variant("caption").text(format!(
-            "{WIDTH} x {HEIGHT} pixels, {PIXEL_SATS} sats each. Everyone paints on the same image."
-        )),
         image("canvas")
             .src(canvas)
-            .alt("The pixel wall")
+            .alt("Pixel wall")
             .variant("full"),
         card("paint")
-            .title("Pick a pixel")
             .children([
                 row("position").children([
                     input("col")
@@ -351,7 +350,7 @@ fn page(canvas: &str, cart: &Cart) -> vtree::Node {
                         .bind("paint.color")
                         .options(PALETTE.iter().map(|(name, value)| json!({"value": value, "label": name})).collect::<Vec<_>>()),
                     input("custom")
-                        .label("Or any color, as #rrggbb")
+                        .label("Hex color")
                         .placeholder("#ff00ff")
                         .bind("paint.custom"),
                 ]),
@@ -359,16 +358,16 @@ fn page(canvas: &str, cart: &Cart) -> vtree::Node {
             .children(cart.error.as_ref().map(|error| notice("error").variant("failure").text(error.as_str())))
             .child(
                 row("paint-actions").justify("end").child(
-                    button("add").label("Add to my pixels").on_press(Handler::action("add")),
+                    button("add").label("Add").on_press(Handler::action("add")),
                 ),
             ),
         card("cart")
-            .title(format!("My pixels ({})", pixels.len()))
+            .title(format!("Pixels ({})", pixels.len()))
             .child(
-                list("cart-list").empty("No pixels picked yet.").children(pixels.iter().map(|p| {
+                list("cart-list").empty("No pixels selected.").children(pixels.iter().map(|p| {
                     row(format!("pixel-{}-{}", p.col, p.row)).justify("between").children([
                         text(format!("pixel-{}-{}-text", p.col, p.row)).text(format!(
-                            "column {}, row {}: {}",
+                            "({}, {}) {}",
                             p.col,
                             p.row,
                             hex(p.color)

@@ -3,7 +3,7 @@
 //! are told apart by the key of the payee of the invoices they send, and
 //! each may take a limited sum in all.
 
-use crate::cop::{request_invoice, Flow, Out, Service};
+use crate::cop::{request_invoice, Flow, Out, Service, Sessions};
 use async_trait::async_trait;
 use cassis_core::{unix_now, Invoice};
 use hypereffect::vtree::{self, button, column, input, notice, row, text};
@@ -30,6 +30,7 @@ pub struct Faucet {
     /// Sats taken so far, by the key of the wallet.
     taken: Mutex<BTreeMap<String, u64>>,
     changed: broadcast::Sender<()>,
+    sessions: Sessions<State>,
 }
 
 impl Faucet {
@@ -45,16 +46,13 @@ impl Faucet {
             limits,
             taken: Mutex::new(taken),
             changed: broadcast::channel(16).0,
+            sessions: Default::default(),
         }))
     }
 
     /// Fires when what a wallet has taken changes.
     pub fn subscribe(&self) -> broadcast::Receiver<()> {
         self.changed.subscribe()
-    }
-
-    pub fn limits(&self) -> Limits {
-        self.limits
     }
 
     /// Every wallet that took anything, and how much, the biggest first.
@@ -137,31 +135,43 @@ impl Service for Faucet {
     }
 
     fn description(&self) -> &'static str {
-        "Free sats, up to a limit for each wallet"
+        "Free test sats"
     }
 
     fn preview(&self) -> String {
         let wallets = self.wallets();
         let total: u64 = wallets.iter().map(|(_, sats)| sats).sum();
-        format!(
-            "<h2>Faucet</h2><p>Up to {} sats a request and {} sats a wallet. \
-             {total} sats given to {} wallet(s) so far.</p>",
-            self.limits.request_sats,
-            self.limits.wallet_sats,
-            wallets.len()
-        )
+        format!("<p>{total} sats given to {} wallet(s).</p>", wallets.len())
     }
 
-    async fn open(self: Arc<Self>, _session: String, out: Out) -> Result<Arc<dyn Flow>, String> {
+    async fn open(
+        self: Arc<Self>,
+        session: String,
+        force_resume: bool,
+        out: Out,
+    ) -> Result<Option<Arc<dyn Flow>>, String> {
+        let Some(state) = self.sessions.open(session, force_resume) else {
+            return Ok(None);
+        };
+        let amount = {
+            let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+            if state.amount == 0 {
+                state.amount = self.limits.request_sats.min(10);
+            }
+            if matches!(state.status, Status::Asked) {
+                state.status = Status::None;
+                state.asked = None;
+            }
+            state.amount
+        };
         let flow = Arc::new(FaucetFlow {
             service: self,
             out: out.clone(),
-            state: Default::default(),
+            state,
         });
-        out.signal(json!({"faucet": {"amount": flow.service.limits.request_sats.min(10)}}))
-            .await?;
+        out.signal(json!({"faucet": {"amount": amount}})).await?;
         flow.redraw().await?;
-        Ok(flow)
+        Ok(Some(flow))
     }
 }
 
@@ -170,8 +180,7 @@ impl Service for Faucet {
 enum Status {
     #[default]
     None,
-    /// Their wallet was asked for an invoice of this many sats.
-    Asked(u64),
+    Asked,
     Sending,
     Paid(String),
     Error(String),
@@ -179,6 +188,7 @@ enum Status {
 
 #[derive(Default)]
 struct State {
+    amount: u64,
     status: Status,
     /// What the invoice the wallet answers with must ask for.
     asked: Option<u64>,
@@ -187,7 +197,7 @@ struct State {
 struct FaucetFlow {
     service: Arc<Faucet>,
     out: Out,
-    state: Mutex<State>,
+    state: Arc<Mutex<State>>,
 }
 
 impl FaucetFlow {
@@ -223,16 +233,17 @@ impl Flow for FaucetFlow {
                 };
                 let Some(sats) = sats.filter(|sats| (1..=limits.request_sats).contains(sats)) else {
                     return self
-                        .fail(format!("Ask for 1 to {} sats.", limits.request_sats))
+                        .fail(format!("1 to {} sats.", limits.request_sats))
                         .await;
                 };
                 if self.service.node.network_ids().is_empty() {
-                    return self.fail("The faucet has no network open right now.").await;
+                    return self.fail("No networks open.").await;
                 }
                 {
                     let mut state = self.state();
+                    state.amount = sats;
                     state.asked = Some(sats);
-                    state.status = Status::Asked(sats);
+                    state.status = Status::Asked;
                 }
                 request_invoice(&self.service.node, &self.out, sats, "Faucet").await?;
                 self.redraw().await
@@ -251,21 +262,16 @@ impl Flow for FaucetFlow {
         };
         let invoice: Invoice = match serde_json::from_value(invoice) {
             Ok(invoice) => invoice,
-            Err(error) => return self.fail(format!("That is not an invoice: {error}")).await,
+            Err(error) => return self.fail(format!("Invalid invoice: {error}")).await,
         };
         if let Err(error) = invoice.verify() {
-            return self.fail(format!("The invoice is not valid: {error}")).await;
+            return self.fail(format!("Invalid invoice: {error}")).await;
         }
         if invoice.body.amount_msat != sats * 1000 {
-            return self
-                .fail(format!(
-                    "The invoice asks for {} msat, not the {sats} sats requested.",
-                    invoice.body.amount_msat
-                ))
-                .await;
+            return self.fail("Invoice amount does not match.").await;
         }
         if invoice.body.expires_at <= unix_now() + 30 {
-            return self.fail("The invoice expires too soon.").await;
+            return self.fail("Invoice expires too soon.").await;
         }
         let ours = self.service.node.network_ids();
         let Some(from) = invoice
@@ -275,15 +281,13 @@ impl Flow for FaucetFlow {
             .map(|entry| entry.target.network().clone())
             .find(|network| ours.contains(network))
         else {
-            return self.fail("The invoice is on none of the faucet's networks.").await;
+            return self.fail("No shared network.").await;
         };
 
         let wallet = invoice.receiver.payee().to_string();
         if let Err(left) = self.service.reserve(&wallet, sats) {
             return self
-                .fail(format!(
-                    "This wallet may take {left} more sat(s), and you asked for {sats}."
-                ))
+                .fail(format!("{left} sat(s) remaining for this wallet."))
                 .await;
         }
         self.set(Status::Sending);
@@ -297,14 +301,12 @@ impl Flow for FaucetFlow {
             Ok(()) => {
                 let taken = self.service.taken().get(&wallet).copied().unwrap_or(sats);
                 let left = self.service.limits.wallet_sats.saturating_sub(taken);
-                self.set(Status::Paid(format!(
-                    "Sent {sats} sats. This wallet has taken {taken} sats and may take {left} more."
-                )));
+                self.set(Status::Paid(format!("Sent {sats} sats ({left} left).")));
             }
             Err(error) => {
                 warn!("faucet: paying {} failed: {error}", short(&wallet));
                 self.service.release(&wallet, sats);
-                self.set(Status::Error(format!("The payment failed: {error}")));
+                self.set(Status::Error(format!("Payment failed: {error}")));
             }
         }
         self.redraw().await
@@ -315,27 +317,24 @@ fn page(limits: Limits, status: &Status) -> vtree::Node {
     // The status is always a notice, so its type stays the same as it changes.
     let status = match status {
         Status::None => None,
-        Status::Asked(sats) => Some(("info", format!("Waiting for your wallet's invoice for {sats} sats…"))),
+        Status::Asked => Some(("info", "Waiting for invoice…".to_string())),
         Status::Sending => Some(("info", "Sending…".to_string())),
         Status::Paid(text) => Some(("success", text.clone())),
         Status::Error(text) => Some(("failure", text.clone())),
     };
-    column("page").children([
-        text("title").variant("h1").text("Faucet"),
-        text("blurb").variant("caption").text(format!(
-            "Ask for up to {} sats at a time. Each wallet may take {} sats in all.",
-            limits.request_sats, limits.wallet_sats
-        )),
-        row("ask").children([
-            input("amount")
-                .variant("number")
-                .label(format!("Sats (1-{})", limits.request_sats))
-                .bind("faucet.amount"),
-            button("request")
-                .variant("primary")
-                .label("Request")
-                .on_press(Handler::action("request")),
-        ]),
-    ])
-    .children(status.map(|(variant, text)| notice("status").variant(variant).text(text)))
+    column("page")
+        .children([
+            text("title").variant("h1").text("Faucet"),
+            row("ask").children([
+                input("amount")
+                    .variant("number")
+                    .label(format!("Sats (1-{})", limits.request_sats))
+                    .bind("faucet.amount"),
+                button("request")
+                    .variant("primary")
+                    .label("Request")
+                    .on_press(Handler::action("request")),
+            ]),
+        ])
+        .children(status.map(|(variant, text)| notice("status").variant(variant).text(text)))
 }

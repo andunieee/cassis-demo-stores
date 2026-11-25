@@ -26,7 +26,9 @@ cassis-wallet = { git = "https://github.com/andunieee/cassis", rev = "5a04b43034
 clap = { version = "4.6.6", features = ["derive", "env"] }
 base64 = "0.22.1"
 hyperb-cassis-wallet = { git = "https://github.com/andunieee/cassis", rev = "5a04b43034a4335311afc3954ef9ea4c1bdeca08" }
-hypereffect = "0.6.3"
+hypereffect = "0.7.0"
+# `hyperb-cassis-wallet` is still on hypereffect 0.6.
+hypereffect_06 = { package = "hypereffect", version = "0.6.3" }
 iroh = "1.0.3"
 openssl-sys = { version = "0.9.118", features = ["vendored"], optional = true }
 png = "0.17"

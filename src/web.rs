@@ -54,15 +54,11 @@ fn qr(uri: &str) -> String {
 }
 
 async fn index(State(listings): State<Arc<Vec<Listing>>>) -> Html<String> {
-    let mut body = String::from(
-        "<h1>Cassis demo stores</h1>\
-         <p class=\"muted\">Small shops that speak the Cassis Order Protocol. \
-         Open one in a Cassis wallet to use it.</p>",
-    );
+    let mut body = String::from("<h1>Cassis demo stores</h1>");
     for listing in listings.iter() {
         body.push_str(&format!(
             "<div class=\"card\"><h2>{name}</h2><p>{description}</p>\
-             <p><a href=\"{uri}\">Open in your wallet</a> · <a href=\"/{slug}\">QR code and web address</a></p>\
+             <p><a href=\"{uri}\">Open</a> · <a href=\"/{slug}\">QR code</a></p>\
              <code>{uri}</code></div>",
             name = listing.name,
             description = listing.description,
@@ -94,9 +90,8 @@ async fn service(
         &format!(
             "<p><a href=\"/\">All stores</a></p><h1>{name}</h1><p>{description}</p>\
              {preview}\
-             <h2>Pay to take part</h2>\
              <div class=\"card qr\">{qr}</div>\
-             <p><a href=\"{uri}\">Open in your wallet</a></p><code>{uri}</code>",
+             <p><a href=\"{uri}\">Open</a></p><code>{uri}</code>",
             name = listing.name,
             description = listing.description,
             qr = qr(&listing.uri),
