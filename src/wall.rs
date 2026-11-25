@@ -327,3 +327,22 @@ fn page(number: usize, messages: &[String], status: &Status, history: Option<vtr
         ])
         .children(history)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::history::{Deed, History};
+
+    #[test]
+    fn pages_render() {
+        let log = History::in_memory().log("wall", "abc");
+        log.record(MESSAGE_SATS, Deed::Posted { wall: 1, message: "hi".into() });
+        log.record(wall_sats(1), Deed::NewWall { wall: 2 });
+        let messages = vec!["hi".to_string(), "hi".to_string()];
+        // vtree panics on an id used twice anywhere in the tree.
+        for status in [Status::None, Status::Paid("Message posted.".into()), Status::Error("1 to 280 characters.".into())] {
+            vtree::render(&page(1, &[], &status, None));
+            vtree::render(&page(2, &messages, &status, log.card()));
+        }
+    }
+}

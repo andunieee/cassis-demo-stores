@@ -377,7 +377,7 @@ fn page(pot: u64, owed: u64, status: &Status, history: Option<vtree::Node>) -> v
                     "{TICKET_SATS} sats a ticket, {WIN_PERCENT}% chance to win {PRIZE_PERCENT}% of the pot"
                 )),
             ]),
-            card("play")
+            card("pot")
                 .title(format!("Pot: {pot} sats"))
                 .children(claim)
                 .children(status.map(|(variant, text)| notice("status").variant(variant).text(text)))
@@ -395,4 +395,29 @@ fn page(pot: u64, owed: u64, status: &Status, history: Option<vtree::Node>) -> v
                 ),
         ])
         .children(history)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pages_render() {
+        let log = History::in_memory().log("casino", "abc");
+        log.record(TICKET_SATS, Deed::Played { won: 0 });
+        log.record(90, Deed::Won);
+        let statuses = [
+            Status::None,
+            Status::Lost,
+            Status::Won(90),
+            Status::Sending,
+            Status::Paid("Sent 90 sats.".into()),
+            Status::Error("Payment failed".into()),
+        ];
+        // vtree panics on an id used twice anywhere in the tree.
+        for status in &statuses {
+            vtree::render(&page(0, 0, status, None));
+            vtree::render(&page(1000, 90, status, log.card()));
+        }
+    }
 }
