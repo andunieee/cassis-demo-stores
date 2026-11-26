@@ -4,8 +4,10 @@
 
 use crate::history::{History, Log};
 use async_trait::async_trait;
-use cassis_core::unix_now;
+use cassis_core::routing;
+use cassis_core::{unix_now, Invoice};
 use cassis_wallet::db::{InvoiceHash, InvoiceState};
+use cassis_wallet::node::DEFAULT_MAX_ROUTES;
 use cassis_wallet::Node;
 use hypereffect::message::{encode_line, parse_line};
 use hypereffect::vtree;
@@ -339,6 +341,37 @@ pub async fn request_invoice(out: &Out, sats: u64, description: &str) -> Result<
         }),
     ))
     .await
+}
+
+/// The relays routes are announced on: both those for real money and
+/// those for test money, so a payment may start on any network.
+fn route_relays() -> Vec<String> {
+    routing::DEFAULT_NOSTR_RELAYS
+        .iter()
+        .chain(routing::TEST_NOSTR_RELAYS)
+        .map(|relay| relay.to_string())
+        .collect()
+}
+
+/// Pay `invoice` with Cassis, routing it through other networks when it
+/// does not accept any of this node's. A network the invoice accepts is
+/// tried first, so a payment it can take stays direct; the others are
+/// tried only when no payment could start. `Err` is the last such reason.
+pub async fn pay_invoice(node: &Node, invoice: &Invoice) -> Result<(), String> {
+    let relays = route_relays();
+    let mut ours = node.network_ids();
+    ours.sort_by_key(|network| invoice.target_for(network).is_none());
+    let mut error = None;
+    for from in ours {
+        match node
+            .pay_retrying(invoice, &from, &relays, DEFAULT_MAX_ROUTES)
+            .await
+        {
+            Ok(report) => return report.into_result().map(|_| ()),
+            Err(reason) => error = Some(reason),
+        }
+    }
+    Err(error.unwrap_or_else(|| "No networks open.".into()))
 }
 
 /// The fewest sats an invoice of this node can ask for: the lowest

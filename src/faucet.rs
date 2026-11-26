@@ -3,7 +3,7 @@
 //! are told apart by the key of the payee of the invoices they send, and
 //! each may take a limited sum in all.
 
-use crate::cop::{request_invoice, Flow, Icon, Out, Service, Sessions};
+use crate::cop::{pay_invoice, request_invoice, Flow, Icon, Out, Service, Sessions};
 use crate::history::{Deed, History, Log};
 use async_trait::async_trait;
 use cassis_core::{unix_now, Invoice};
@@ -296,17 +296,6 @@ impl Flow for FaucetFlow {
         if invoice.body.expires_at <= unix_now() + 30 {
             return self.fail("Invoice expires too soon.").await;
         }
-        let ours = self.service.node.network_ids();
-        let Some(from) = invoice
-            .body
-            .networks
-            .iter()
-            .map(|entry| entry.target.network().clone())
-            .find(|network| ours.contains(network))
-        else {
-            return self.fail("No shared network.").await;
-        };
-
         let wallet = invoice.receiver.payee().to_string();
         if let Err(left) = self.service.reserve(&wallet, sats) {
             return self
@@ -315,11 +304,8 @@ impl Flow for FaucetFlow {
         }
         self.set(Status::Sending);
         self.redraw().await?;
-        info!("faucet: paying {sats} sats to {} on {from}", short(&wallet));
-        let paid = match self.service.node.pay(&invoice, &from, &[], &Default::default()).await {
-            Ok(report) => report.into_result().map(|_| ()),
-            Err(error) => Err(error),
-        };
+        info!("faucet: paying {sats} sats to {}", short(&wallet));
+        let paid = pay_invoice(&self.service.node, &invoice).await;
         match paid {
             Ok(()) => {
                 self.log.record(sats, Deed::Received);

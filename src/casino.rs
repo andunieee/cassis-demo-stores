@@ -5,7 +5,10 @@
 //! its wallet answers an `invoicerequest` and the payment goes through, so
 //! a winner who left, or whose payment failed, claims it later.
 
-use crate::cop::{min_invoice_sats, request_invoice, request_payment, unpayable, Flow, Icon, Out, Service, Sessions};
+use crate::cop::{
+    min_invoice_sats, pay_invoice, request_invoice, request_payment, unpayable, Flow, Icon, Out,
+    Service, Sessions,
+};
 use crate::history::{Deed, History, Log};
 use async_trait::async_trait;
 use cassis_core::{unix_now, Invoice};
@@ -341,26 +344,13 @@ impl Flow for CasinoFlow {
         if invoice.body.expires_at <= unix_now() + 30 {
             return self.fail("Invoice expires too soon.").await;
         }
-        let ours = self.service.node.network_ids();
-        let Some(from) = invoice
-            .body
-            .networks
-            .iter()
-            .map(|entry| entry.target.network().clone())
-            .find(|network| ours.contains(network))
-        else {
-            return self.fail("No shared network.").await;
-        };
         if !self.service.take(&self.token, sats) {
             return self.fail("The prize changed, claim it again.").await;
         }
         self.set(Status::Sending);
         self.redraw().await?;
-        info!("casino: paying a prize of {sats} sats on {from}");
-        let paid = match self.service.node.pay(&invoice, &from, &[], &Default::default()).await {
-            Ok(report) => report.into_result().map(|_| ()),
-            Err(error) => Err(error),
-        };
+        info!("casino: paying a prize of {sats} sats");
+        let paid = pay_invoice(&self.service.node, &invoice).await;
         match paid {
             Ok(()) => {
                 self.log.record(sats, Deed::Won);
