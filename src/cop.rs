@@ -328,17 +328,14 @@ async fn flow(
     Ok(())
 }
 
-/// Ask the client for an invoice of `sats` on any network of this node,
-/// to pay it: the answer comes to [`Flow::invoice`].
-pub async fn request_invoice(node: &Node, out: &Out, sats: u64, memo: &str) -> Result<(), String> {
-    let networks: Vec<String> = node.network_ids().iter().map(|network| network.to_string()).collect();
+/// Ask the client for an invoice of `sats` to pay it: the answer comes to
+/// [`Flow::invoice`].
+pub async fn request_invoice(out: &Out, sats: u64, description: &str) -> Result<(), String> {
     out.send(encode_line(
         "invoicerequest",
         &json!({
             "amount": sats,
-            "networks": networks,
-            "memo": memo,
-            "expiresIn": INVOICE_TTL_SECS,
+            "description": description,
         }),
     ))
     .await
@@ -373,7 +370,7 @@ pub async fn request_payment(
     node: &Node,
     out: &Out,
     sats: u64,
-    memo: String,
+    description: String,
     on_paid: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), String> {
     let expires_at = unix_now() + INVOICE_TTL_SECS;
@@ -382,7 +379,7 @@ pub async fn request_payment(
             &node.network_ids(),
             sats * 1000,
             expires_at,
-            Some(memo.clone()),
+            Some(description),
             None,
         )
         .await
@@ -395,7 +392,7 @@ pub async fn request_payment(
                 .await;
         }
     };
-    out.send(encode_line("invoice", &json!({"invoice": invoice, "memo": memo})))
+    out.send(encode_line("invoice", &json!({"invoice": invoice})))
         .await?;
     let key = InvoiceHash(invoice.body.payment_hash.0);
     let watcher = node.clone();

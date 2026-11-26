@@ -268,7 +268,7 @@ impl Flow for FaucetFlow {
                     state.asked = Some(sats);
                     state.status = Status::Asked;
                 }
-                request_invoice(&self.service.node, &self.out, sats, "Faucet").await?;
+                request_invoice(&self.out, sats, "Faucet").await?;
                 self.redraw().await
             }
             other => {

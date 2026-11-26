@@ -259,9 +259,9 @@ impl CasinoFlow {
 }
 
 /// Ask the wallet of a flow for an invoice of the `sats` owed to it.
-async fn claim(node: &cassis_wallet::Node, out: &Out, state: &Mutex<State>, sats: u64) -> Result<(), String> {
+async fn claim(out: &Out, state: &Mutex<State>, sats: u64) -> Result<(), String> {
     state.lock().unwrap_or_else(|e| e.into_inner()).asked = Some(sats);
-    request_invoice(node, out, sats, "Casino prize").await
+    request_invoice(out, sats, "Casino prize").await
 }
 
 #[async_trait]
@@ -295,7 +295,7 @@ impl Flow for CasinoFlow {
                                 info!("casino: a ticket won {sats} sats");
                                 state.lock().unwrap_or_else(|e| e.into_inner()).status = Status::Won(sats);
                                 let owed = service.owed(&token);
-                                if let Err(error) = claim(&service.node, &out, &state, owed).await {
+                                if let Err(error) = claim(&out, &state, owed).await {
                                     warn!("casino: ask for a prize invoice: {error}");
                                 }
                             }
@@ -313,7 +313,7 @@ impl Flow for CasinoFlow {
                     return self.redraw().await;
                 }
                 self.set(Status::Won(owed));
-                claim(&self.service.node, &self.out, &self.state, owed).await?;
+                claim(&self.out, &self.state, owed).await?;
                 self.redraw().await
             }
             other => {

@@ -325,9 +325,9 @@ impl Flow for PixelFlow {
                     return Ok(());
                 }
                 let sats = PIXEL_SATS * pixels.len() as u64;
-                let memo = format!("{} pixel(s) on the pixel wall", pixels.len());
+                let description = format!("{} pixel(s) on the pixel wall", pixels.len());
                 let flow = (self.service.clone(), self.out.clone(), self.cart.clone(), self.log.clone());
-                request_payment(&self.service.node, &self.out, sats, memo, async move {
+                request_payment(&self.service.node, &self.out, sats, description, async move {
                     let (service, out, cart, log) = flow;
                     log.record(
                         sats,
