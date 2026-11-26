@@ -1,7 +1,8 @@
 # cassis-demo-stores
 
 Demo storefronts for the [Cassis Order Protocol](https://github.com/andunieee/cassis):
-a pixel board, a wall of numbers, a faucet, and a casino, all served over the
+a pixel board, a wall of numbers, a faucet, a casino, and a compute store
+that sells server-side arithmetic by the credit, all served over the
 node's own iroh endpoint — the same key that is the payee of every invoice —
 plus a web page that links to them. Each store is told apart by the `store`
 parameter in its `cop://` URI.

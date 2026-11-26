@@ -5,6 +5,7 @@
 
 mod admin;
 mod casino;
+mod compute;
 mod cop;
 mod faucet;
 mod history;
@@ -121,22 +122,25 @@ async fn run(cli: Cli) -> Result<(), String> {
         },
         history.clone(),
     )?;
-    let casino = casino::Casino::new(node.clone(), cli.data.join("casino.json"), history)?;
+    let casino = casino::Casino::new(node.clone(), cli.data.join("casino.json"), history.clone())?;
+    let compute = compute::Compute::new(node.clone(), cli.data.join("compute.json"), history)?;
     // The pay buttons follow the networks that are open.
     let mut networks = networks_changed.subscribe();
-    let stores = (pixels.clone(), wall.clone(), casino.clone());
+    let stores = (pixels.clone(), wall.clone(), casino.clone(), compute.clone());
     tokio::spawn(async move {
         while !matches!(networks.recv().await, Err(tokio::sync::broadcast::error::RecvError::Closed)) {
             stores.0.refresh();
             stores.1.refresh();
             stores.2.refresh();
+            stores.3.refresh();
         }
     });
-    let services: [(&str, Arc<dyn cop::Service>); 4] = [
+    let services: [(&str, Arc<dyn cop::Service>); 5] = [
         ("pixels", pixels.clone()),
         ("wall", wall.clone()),
         ("faucet", faucet.clone()),
         ("casino", casino),
+        ("compute", compute),
     ];
     // One endpoint, the node's payee identity, carries every store and the
     // node's payments. The URI's `store` parameter tells the flows apart.

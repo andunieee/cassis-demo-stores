@@ -35,6 +35,8 @@ pub mod schema {
         Played { won: u64 },
         /// A casino prize that was paid.
         Won,
+        /// Compute credits bought, one a sat.
+        Credited,
     }
 
     #[entity]
@@ -181,6 +183,7 @@ impl Deed {
             Deed::Played { won: 0 } => "Played a casino ticket, lost".into(),
             Deed::Played { won } => format!("Played a casino ticket, won {won} sats"),
             Deed::Won => "Received a casino prize".into(),
+            Deed::Credited => "Bought compute credits".into(),
         }
     }
 }
