@@ -39,7 +39,7 @@ struct Cli {
     #[arg(long, value_name = "ADDR", default_value = "127.0.0.1:8080")]
     listen: SocketAddr,
     /// The most sats the faucet gives in one request.
-    #[arg(long, value_name = "SATS", default_value_t = 100)]
+    #[arg(long, value_name = "SATS", default_value_t = 500)]
     faucet_request: u64,
     /// The most sats the faucet gives one wallet in all.
     #[arg(long, value_name = "SATS", default_value_t = 1000)]
