@@ -1,7 +1,7 @@
 //! The pixel wall: a small image everyone paints on. A payer picks pixels
 //! by column and row and a color, then pays [`PIXEL_SATS`] for each one.
 
-use crate::cop::{min_invoice_sats, request_payment, unpayable, Flow, Out, Service, Sessions};
+use crate::cop::{min_invoice_sats, request_payment, unpayable, Flow, Icon, Out, Service, Sessions};
 use crate::history::{Deed, History, Log};
 use async_trait::async_trait;
 use base64::Engine;
@@ -174,8 +174,22 @@ impl Service for Pixels {
         "50 sats a pixel"
     }
 
-    fn icon(&self) -> &'static str {
-        "🎨"
+    fn icon(&self) -> Icon {
+        Icon {
+            top: "#f783ac",
+            bottom: "#a61e4d",
+            shapes: "\
+                <rect x=\"18\" y=\"18\" width=\"64\" height=\"64\" rx=\"10\" fill=\"#fff\"/>\
+                <rect x=\"24\" y=\"24\" width=\"16\" height=\"16\" rx=\"3\" fill=\"#ff6b6b\"/>\
+                <rect x=\"42\" y=\"24\" width=\"16\" height=\"16\" rx=\"3\" fill=\"#ffd43b\"/>\
+                <rect x=\"60\" y=\"24\" width=\"16\" height=\"16\" rx=\"3\" fill=\"#51cf66\"/>\
+                <rect x=\"24\" y=\"42\" width=\"16\" height=\"16\" rx=\"3\" fill=\"#339af0\"/>\
+                <rect x=\"42\" y=\"42\" width=\"16\" height=\"16\" rx=\"3\" fill=\"#845ef7\"/>\
+                <rect x=\"60\" y=\"42\" width=\"16\" height=\"16\" rx=\"3\" fill=\"#ff922b\"/>\
+                <rect x=\"24\" y=\"60\" width=\"16\" height=\"16\" rx=\"3\" fill=\"#20c997\"/>\
+                <rect x=\"42\" y=\"60\" width=\"16\" height=\"16\" rx=\"3\" fill=\"#f06595\"/>\
+                <rect x=\"60\" y=\"60\" width=\"16\" height=\"16\" rx=\"3\" fill=\"#22b8cf\"/>",
+        }
     }
 
     fn preview(&self) -> String {

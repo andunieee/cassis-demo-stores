@@ -9,7 +9,7 @@
 //! the console: the key that opens it becomes an operator. An operator can
 //! let other keys in, and take them out again, from the Operators tab.
 
-use crate::cop::Out;
+use crate::cop::{Icon, Out};
 use crate::faucet::{short, Faucet};
 use crate::pixels::Pixels;
 use crate::wall::Wall;
@@ -284,6 +284,17 @@ struct Session {
     view: Mutex<View>,
 }
 
+/// A gear: its teeth are the dashes of a thick stroke around its body.
+const ICON: Icon = Icon {
+    top: "#9775fa",
+    bottom: "#5f3dc4",
+    shapes: "\
+        <circle cx=\"50\" cy=\"50\" r=\"30\" fill=\"none\" stroke=\"#fff\" stroke-width=\"11\" \
+        stroke-dasharray=\"11.78 11.78\" stroke-dashoffset=\"5.89\"/>\
+        <circle cx=\"50\" cy=\"50\" r=\"27\" fill=\"#fff\"/>\
+        <circle cx=\"50\" cy=\"50\" r=\"10\" fill=\"#7048e8\"/>",
+};
+
 async fn session(
     admin: Arc<Admin>,
     key: String,
@@ -294,7 +305,7 @@ async fn session(
     let metadata = Metadata::new()
         .name("Demo stores admin")
         .description("Moderate the stores, the faucet and the wallets that get paid")
-        .icon(crate::cop::icon("🛠️"));
+        .icon(ICON.url());
     out.send(ServerMessage::from(metadata).to_line()).await?;
     let session = Arc::new(Session {
         admin: admin.clone(),

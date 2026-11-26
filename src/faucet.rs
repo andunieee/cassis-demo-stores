@@ -3,7 +3,7 @@
 //! are told apart by the key of the payee of the invoices they send, and
 //! each may take a limited sum in all.
 
-use crate::cop::{request_invoice, Flow, Out, Service, Sessions};
+use crate::cop::{request_invoice, Flow, Icon, Out, Service, Sessions};
 use crate::history::{Deed, History, Log};
 use async_trait::async_trait;
 use cassis_core::{unix_now, Invoice};
@@ -144,8 +144,19 @@ impl Service for Faucet {
         "Free test sats"
     }
 
-    fn icon(&self) -> &'static str {
-        "🚰"
+    fn icon(&self) -> Icon {
+        Icon {
+            top: "#4dabf7",
+            bottom: "#1864ab",
+            shapes: "\
+                <rect x=\"35\" y=\"16\" width=\"30\" height=\"8\" rx=\"4\" fill=\"#fff\"/>\
+                <rect x=\"46\" y=\"22\" width=\"8\" height=\"12\" fill=\"#dee2e6\"/>\
+                <rect x=\"12\" y=\"32\" width=\"10\" height=\"22\" rx=\"3\" fill=\"#ced4da\"/>\
+                <path d=\"M20 35H60a16 16 0 0 1 16 16v7H62v-5a3 3 0 0 0-3-3H20z\" fill=\"#fff\"/>\
+                <path d=\"M69 64c-5 7-8 11.5-8 15a8 8 0 0 0 16 0c0-3.5-3-8-8-15z\" fill=\"#99e9f2\"/>\
+                <path d=\"M65.5 79a3.5 3.5 0 0 0 3.5 3.5\" fill=\"none\" stroke=\"#fff\" \
+                stroke-width=\"2\" stroke-linecap=\"round\"/>",
+        }
     }
 
     fn preview(&self) -> String {

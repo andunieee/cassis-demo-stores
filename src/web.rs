@@ -30,7 +30,8 @@ code{display:block;overflow-wrap:anywhere;font-size:.8rem;margin:.5rem 0}\
 .muted{opacity:.7}\
 .canvas{display:block;width:100%;image-rendering:pixelated;border:1px solid var(--line);border-radius:8px}\
 .message{white-space:pre-wrap;overflow-wrap:anywhere}\
-.icon{margin-right:.4em}";
+.titled{display:flex;align-items:center;gap:.45em}\
+.icon{width:1.25em;height:1.25em;flex:none}";
 
 pub fn escape(text: &str) -> String {
     text.replace('&', "&amp;")
@@ -58,10 +59,10 @@ async fn index(State(listings): State<Arc<Vec<Listing>>>) -> Html<String> {
     let mut body = String::from("<h1>Cassis demo stores</h1>");
     for listing in listings.iter() {
         body.push_str(&format!(
-            "<div class=\"card\"><h2><span class=\"icon\">{icon}</span>{name}</h2><p>{description}</p>\
+            "<div class=\"card\"><h2 class=\"titled\"><img class=\"icon\" src=\"{icon}\" alt=\"\">{name}</h2><p>{description}</p>\
              <p><a href=\"{uri}\">Open</a> · <a href=\"/{slug}\">QR code</a></p>\
              <code>{uri}</code></div>",
-            icon = listing.service.icon(),
+            icon = escape(&listing.service.icon().url()),
             name = listing.name,
             description = listing.description,
             uri = escape(&listing.uri),
@@ -80,6 +81,7 @@ async fn service(
         .find(|listing| listing.slug == slug)
         .ok_or(StatusCode::NOT_FOUND)?;
     let uri = escape(&listing.uri);
+    let icon = escape(&listing.service.icon().url());
     let preview = listing.service.preview();
     // What the service holds changes as people pay: look again now and then.
     let refresh = if preview.is_empty() {
@@ -90,14 +92,12 @@ async fn service(
     Ok(document(
         &format!(
             "<link rel=\"cassis-order\" href=\"{uri}\"><link rel=\"icon\" href=\"{icon}\">{refresh}",
-            icon = escape(&crate::cop::icon(listing.service.icon())),
         ),
         &format!(
-            "<p><a href=\"/\">All stores</a></p><h1><span class=\"icon\">{icon}</span>{name}</h1><p>{description}</p>\
+            "<p><a href=\"/\">All stores</a></p><h1 class=\"titled\"><img class=\"icon\" src=\"{icon}\" alt=\"\">{name}</h1><p>{description}</p>\
              {preview}\
              <div class=\"card qr\">{qr}</div>\
              <p><a href=\"{uri}\">Open</a></p><code>{uri}</code>",
-            icon = listing.service.icon(),
             name = listing.name,
             description = listing.description,
             qr = qr(&listing.uri),

@@ -2,7 +2,7 @@
 //! costs [`MESSAGE_SATS`]. Starting a new wall costs 100 sats times the
 //! number the wall will have; only the last wall is shown.
 
-use crate::cop::{min_invoice_sats, request_payment, unpayable, Flow, Out, Service, Sessions};
+use crate::cop::{min_invoice_sats, request_payment, unpayable, Flow, Icon, Out, Service, Sessions};
 use crate::history::{Deed, History, Log};
 use async_trait::async_trait;
 use hypereffect::vtree::{self, button, card, column, input, list, notice, row, text};
@@ -117,8 +117,20 @@ impl Service for Wall {
         "50 sats a message"
     }
 
-    fn icon(&self) -> &'static str {
-        "📜"
+    fn icon(&self) -> Icon {
+        Icon {
+            top: "#ffa94d",
+            bottom: "#d9480f",
+            shapes: "\
+                <rect x=\"24\" y=\"22\" width=\"52\" height=\"56\" fill=\"#fff4e6\"/>\
+                <g fill=\"#ffe8cc\"><rect x=\"16\" y=\"15\" width=\"68\" height=\"13\" rx=\"6.5\"/>\
+                <rect x=\"16\" y=\"72\" width=\"68\" height=\"13\" rx=\"6.5\"/></g>\
+                <g fill=\"#ffc078\"><circle cx=\"22.5\" cy=\"21.5\" r=\"4\"/><circle cx=\"77.5\" cy=\"21.5\" r=\"4\"/>\
+                <circle cx=\"22.5\" cy=\"78.5\" r=\"4\"/><circle cx=\"77.5\" cy=\"78.5\" r=\"4\"/></g>\
+                <g fill=\"#e8590c\"><rect x=\"32\" y=\"38\" width=\"36\" height=\"4.5\" rx=\"2.25\"/>\
+                <rect x=\"32\" y=\"48\" width=\"36\" height=\"4.5\" rx=\"2.25\"/>\
+                <rect x=\"32\" y=\"58\" width=\"24\" height=\"4.5\" rx=\"2.25\"/></g>",
+        }
     }
 
     fn preview(&self) -> String {

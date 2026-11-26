@@ -5,7 +5,7 @@
 //! its wallet answers an `invoicerequest` and the payment goes through, so
 //! a winner who left, or whose payment failed, claims it later.
 
-use crate::cop::{min_invoice_sats, request_invoice, request_payment, unpayable, Flow, Out, Service, Sessions};
+use crate::cop::{min_invoice_sats, request_invoice, request_payment, unpayable, Flow, Icon, Out, Service, Sessions};
 use crate::history::{Deed, History, Log};
 use async_trait::async_trait;
 use cassis_core::{unix_now, Invoice};
@@ -141,8 +141,24 @@ impl Service for Casino {
         "100 sats a ticket, 10% chance to win 90% of the pot"
     }
 
-    fn icon(&self) -> &'static str {
-        "🎰"
+    fn icon(&self) -> Icon {
+        Icon {
+            top: "#69db7c",
+            bottom: "#2b8a3e",
+            shapes: "\
+                <rect x=\"24\" y=\"18\" width=\"42\" height=\"12\" rx=\"6\" fill=\"#ffd43b\"/>\
+                <rect x=\"14\" y=\"27\" width=\"62\" height=\"52\" rx=\"10\" fill=\"#fff\"/>\
+                <rect x=\"20\" y=\"37\" width=\"50\" height=\"28\" rx=\"5\" fill=\"#343a40\"/>\
+                <g fill=\"#f8f9fa\"><rect x=\"23\" y=\"40\" width=\"13.3\" height=\"22\" rx=\"3\"/>\
+                <rect x=\"38.3\" y=\"40\" width=\"13.3\" height=\"22\" rx=\"3\"/>\
+                <rect x=\"53.6\" y=\"40\" width=\"13.3\" height=\"22\" rx=\"3\"/></g>\
+                <path d=\"M25.5 45.5h8.3l-5 11M40.8 45.5h8.3l-5 11M56.1 45.5h8.3l-5 11\" fill=\"none\" \
+                stroke=\"#e03131\" stroke-width=\"3.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>\
+                <rect x=\"26\" y=\"69\" width=\"38\" height=\"5\" rx=\"2.5\" fill=\"#ced4da\"/>\
+                <path d=\"M76 62h6V34\" fill=\"none\" stroke=\"#fff\" stroke-width=\"4.5\" \
+                stroke-linecap=\"round\" stroke-linejoin=\"round\"/>\
+                <circle cx=\"82\" cy=\"29\" r=\"6.5\" fill=\"#ff6b6b\"/>",
+        }
     }
 
     fn preview(&self) -> String {
