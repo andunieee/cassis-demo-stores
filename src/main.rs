@@ -1,6 +1,7 @@
 //! `cassis-demo-stores`: a server that offers Cassis Order Protocol
-//! services, one iroh key each, and a web page that links to them. This
-//! node, a Cassis wallet home, is the payee of all of them.
+//! services over one iroh endpoint, the key of its Cassis wallet home, and
+//! a web page that links to them. That same node is the payee of every
+//! invoice the services issue.
 
 mod admin;
 mod casino;
@@ -15,9 +16,11 @@ use cassis_wallet::{Home, Node, NodeConfig};
 use hyperb_cassis_wallet::{ConfigFile, WalletAdmin};
 use clap::Parser;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::{info, info_span, warn};
 
 #[derive(Parser)]
@@ -42,12 +45,12 @@ struct Cli {
     faucet_wallet: u64,
 }
 
-/// The secret of the endpoint of the service `slug`: stable, so its URI
-/// keeps working, and its own, so no two services share a key.
-fn service_secret(home: &Home, slug: &str) -> [u8; 32] {
+/// The secret of the admin endpoint: stable, so its URI keeps working, and
+/// its own, so it does not share the node's payee identity.
+fn admin_secret(home: &Home) -> [u8; 32] {
     Sha256::new()
         .chain_update(b"cassis-demo-stores/")
-        .chain_update(slug)
+        .chain_update("admin")
         .chain_update(home.keys.order_endpoint_secret())
         .finalize()
         .into()
@@ -82,11 +85,23 @@ async fn run(cli: Cli) -> Result<(), String> {
             keys: home.keys.clone(),
             db: home.db.clone(),
             span,
-            serve: true,
+            // The one endpoint below serves the node's payments as well as
+            // the stores, so the node must not bind a second endpoint with
+            // the same key.
+            serve: false,
         },
         networks,
     )
     .await?;
+    let settler = node.clone();
+    node.spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_secs(10));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            ticker.tick().await;
+            settler.settle_once().await;
+        }
+    });
     let networks_changed = tokio::sync::broadcast::channel(4).0;
     wallets.attach(Arc::new(admin::NodeHost {
         node: node.clone(),
@@ -123,11 +138,13 @@ async fn run(cli: Cli) -> Result<(), String> {
         ("faucet", faucet.clone()),
         ("casino", casino),
     ];
+    // One endpoint, the node's payee identity, carries every store and the
+    // node's payments. The URI's `store` parameter tells the flows apart.
+    let store_endpoint = cop::bind_many(home.keys.iroh, &[cop::ALPN, cop::HOP_ALPN]).await?;
+    let mut stores = HashMap::new();
     let mut listings = Vec::new();
-    let mut endpoints = Vec::new();
     for (slug, service) in services {
-        let endpoint = cop::bind(service_secret(&home, slug), cop::ALPN).await?;
-        let uri = cop::uri(&endpoint, service.name());
+        let uri = cop::uri(&store_endpoint, slug, service.name());
         println!("{}: {uri}", service.name());
         listings.push(web::Listing {
             slug,
@@ -136,13 +153,18 @@ async fn run(cli: Cli) -> Result<(), String> {
             uri,
             service: service.clone(),
         });
-        endpoints.push(tokio::spawn(cop::serve(endpoint, service)));
+        stores.insert(slug.to_string(), service);
     }
+    let servers = tokio::spawn(cop::serve_stores(
+        store_endpoint.clone(),
+        stores,
+        node.clone(),
+    ));
 
     let admin = admin::Admin::new(&cli.data, wall, pixels, faucet, wallets)?;
-    let endpoint = cop::bind(service_secret(&home, "admin"), cop::ADMIN_ALPN).await?;
+    let endpoint = cop::bind(admin_secret(&home), cop::ADMIN_ALPN).await?;
     admin.announce(&endpoint);
-    endpoints.push(tokio::spawn(admin::serve(admin, endpoint)));
+    let admin_server = tokio::spawn(admin::serve(admin, endpoint));
 
     let listener = tokio::net::TcpListener::bind(cli.listen)
         .await
@@ -154,9 +176,9 @@ async fn run(cli: Cli) -> Result<(), String> {
         })
         .await
         .map_err(|e| format!("serve the web page: {e}"))?;
-    for endpoint in endpoints {
-        endpoint.abort();
-    }
+    servers.abort();
+    admin_server.abort();
+    store_endpoint.close().await;
     node.shutdown().await;
     Ok(())
 }

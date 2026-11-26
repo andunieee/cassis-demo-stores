@@ -1,9 +1,12 @@
-//! What every service shares: the iroh endpoint of a service, the COP flow
-//! on one connection (`hello`, then hypereffect lines both ways), and
-//! asking the payer for an invoice this node issues and claims.
+//! What every service shares: the iroh endpoint, which is also the node's
+//! payee identity, the COP flow on one connection (`hello`, then
+//! hypereffect lines both ways), and asking the payer for an invoice this
+//! node issues and claims.
 
 use crate::history::{History, Log};
 use async_trait::async_trait;
+use cassis_core::protocol::{Request, Response};
+pub use cassis_core::protocol::ALPN as HOP_ALPN;
 use cassis_core::routing;
 use cassis_core::{unix_now, Invoice};
 use cassis_wallet::db::{InvoiceHash, InvoiceState};
@@ -12,7 +15,7 @@ use cassis_wallet::Node;
 use hypereffect::message::{encode_line, parse_line};
 use hypereffect::vtree;
 use hypereffect::{json, Action, Close, LogType, Map, Metadata, RendererMessage, ServerMessage, Value};
-use iroh::endpoint::{presets, SendStream};
+use iroh::endpoint::{presets, Connection, SendStream};
 use iroh::{Endpoint, SecretKey};
 use std::collections::HashMap;
 use std::future::Future;
@@ -29,6 +32,10 @@ pub const ALPN: &[u8] = b"cassis-order";
 pub const ADMIN_ALPN: &[u8] = b"hyperb/0/admin";
 pub const SESSION_NOT_FOUND: &str = "session_not_found";
 const INVOICE_TTL_SECS: u64 = 15 * 60;
+/// A hop request and its answer are small JSON; more than this is a peer
+/// gone wrong, not a request.
+const MAX_HOP_BYTES: usize = 1024 * 1024;
+const HOP_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The sessions of a service, kept by the client's `session` token: what
 /// a flow is in the middle of, in memory, and what was done in it, in the
@@ -198,9 +205,15 @@ impl Out {
 
 /// An endpoint whose id is the public key of `secret`.
 pub async fn bind(secret: [u8; 32], alpn: &[u8]) -> Result<Endpoint, String> {
+    bind_many(secret, &[alpn]).await
+}
+
+/// An endpoint whose id is the public key of `secret`, answering any of
+/// `alpns`.
+pub async fn bind_many(secret: [u8; 32], alpns: &[&[u8]]) -> Result<Endpoint, String> {
     let endpoint = Endpoint::builder(presets::N0)
         .secret_key(SecretKey::from(secret))
-        .alpns(vec![alpn.to_vec()])
+        .alpns(alpns.iter().map(|alpn| alpn.to_vec()).collect())
         .bind()
         .await
         .map_err(|e| format!("bind iroh endpoint: {e}"))?;
@@ -208,13 +221,13 @@ pub async fn bind(secret: [u8; 32], alpn: &[u8]) -> Result<Endpoint, String> {
     Ok(endpoint)
 }
 
-/// The `cop://` URI of `endpoint`.
-pub fn uri(endpoint: &Endpoint, name: &str) -> String {
+/// The `cop://` URI of the service `store` on `endpoint`.
+pub fn uri(endpoint: &Endpoint, store: &str, name: &str) -> String {
     let mut uri = format!("cop://{}", endpoint.id());
     if let Some(relay) = endpoint.addr().relay_urls().next() {
         uri.push_str(&format!("?_relay={}", encode(&relay.to_string())));
     }
-    uri.push_str(&format!("#name={}", encode(name)));
+    uri.push_str(&format!("#store={}&name={}", encode(store), encode(name)));
     uri
 }
 
@@ -253,33 +266,52 @@ pub fn encode(text: &str) -> String {
         .collect()
 }
 
-/// Serve `service` on `endpoint` until the endpoint closes.
-pub async fn serve(endpoint: Endpoint, service: Arc<dyn Service>) {
+/// Serve every service on `endpoint` until it closes. One endpoint, the
+/// node's payee identity, carries both the COP flows and `cassis-hop/9`
+/// payments: a COP `hello` picks its service by the `store` parameter the
+/// URI carries, and hop requests go to the node.
+pub async fn serve_stores(
+    endpoint: Endpoint,
+    services: HashMap<String, Arc<dyn Service>>,
+    node: Node,
+) {
     while let Some(incoming) = endpoint.accept().await {
-        let service = service.clone();
+        let services = services.clone();
+        let node = node.clone();
         tokio::spawn(async move {
             let connection = match incoming.await {
                 Ok(connection) => connection,
-                Err(error) => return warn!("order connection failed: {error}"),
+                Err(error) => return warn!("connection failed: {error}"),
             };
-            let Ok((send, recv)) = connection.accept_bi().await else {
-                return;
-            };
-            let metadata = Metadata::new()
-                .name(service.name())
-                .description(service.description())
-                .icon(service.icon().url());
-            let out = Out::with_metadata(send, metadata);
-            if let Err(error) = flow(service.clone(), out.clone(), recv).await {
-                warn!("{} flow ended: {error}", service.name());
+            let alpn = connection.alpn();
+            if alpn == ALPN {
+                let Ok((send, recv)) = connection.accept_bi().await else {
+                    return;
+                };
+                if let Err(error) = flow(&services, send, recv).await {
+                    warn!("order flow ended: {error}");
+                }
+            } else if alpn == HOP_ALPN {
+                if let Err(error) = answer_hop(&connection, &node).await {
+                    warn!("hop request failed: {error}");
+                }
+            } else {
+                warn!("ignoring connection on unknown alpn {}", String::from_utf8_lossy(alpn));
             }
-            out.stop();
             connection.close(0u32.into(), b"done");
         });
     }
 }
 
-fn parse_hello(hello: &Map<String, Value>) -> Result<(String, bool), String> {
+/// The first line of a COP flow.
+struct Hello {
+    session: String,
+    force_resume: bool,
+    /// The URI's fragment parameters.
+    params: Map<String, Value>,
+}
+
+fn parse_hello(hello: &Map<String, Value>) -> Result<Hello, String> {
     let session = hello
         .get("session")
         .and_then(Value::as_str)
@@ -290,43 +322,104 @@ fn parse_hello(hello: &Map<String, Value>) -> Result<(String, bool), String> {
         .get("force_resume")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    Ok((session, force_resume))
+    let params = hello
+        .get("params")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    Ok(Hello {
+        session,
+        force_resume,
+        params,
+    })
+}
+
+fn metadata(service: &dyn Service) -> Metadata {
+    Metadata::new()
+        .name(service.name())
+        .description(service.description())
+        .icon(service.icon().url())
 }
 
 async fn flow(
-    service: Arc<dyn Service>,
-    out: Out,
+    services: &HashMap<String, Arc<dyn Service>>,
+    send: SendStream,
     recv: iroh::endpoint::RecvStream,
 ) -> Result<(), String> {
     let mut lines = BufReader::new(recv).lines();
-    let (session, force_resume) = match lines.next_line().await.map_err(|e| e.to_string())? {
+    let hello = match lines.next_line().await.map_err(|e| e.to_string())? {
         Some(line) => match RendererMessage::parse(&line) {
             Ok(RendererMessage::Hello(hello)) => parse_hello(&hello)?,
             _ => return Err("the flow does not start with a hello".into()),
         },
         None => return Ok(()),
     };
-    let Some(flow) = service.clone().open(session, force_resume, out.clone()).await? else {
-        info!("{}: session not found", service.name());
-        return out.close(Close::new(SESSION_NOT_FOUND)).await;
-    };
-    info!("{} flow opened", service.name());
-    while let Some(line) = lines.next_line().await.map_err(|e| e.to_string())? {
-        if line.is_empty() {
-            continue;
+    let store = hello
+        .params
+        .get("store")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "the hello names no store".to_string())?;
+    let service = services
+        .get(store)
+        .cloned()
+        .ok_or_else(|| format!("unknown store {store}"))?;
+    let out = Out::with_metadata(send, metadata(service.as_ref()));
+    let result: Result<(), String> = async {
+        let Some(flow) = service
+            .clone()
+            .open(hello.session, hello.force_resume, out.clone())
+            .await?
+        else {
+            info!("{}: session not found", service.name());
+            return out.close(Close::new(SESSION_NOT_FOUND)).await;
+        };
+        info!("{} flow opened", service.name());
+        while let Some(line) = lines.next_line().await.map_err(|e| e.to_string())? {
+            if line.is_empty() {
+                continue;
+            }
+            // `invoice` is COP's, not hypereffect's: look at it first.
+            if let Ok(("invoice", body)) = parse_line(&line) {
+                flow.invoice(body.get("invoice").cloned().unwrap_or_default())
+                    .await?;
+                continue;
+            }
+            match RendererMessage::parse(&line) {
+                Ok(RendererMessage::Action(action)) => flow.action(action).await?,
+                Ok(RendererMessage::Hello(_)) => warn!("ignoring a second hello"),
+                Err(error) => warn!("ignoring message: {error}"),
+            }
         }
-        // `invoice` is COP's, not hypereffect's: look at it first.
-        if let Ok(("invoice", body)) = parse_line(&line) {
-            flow.invoice(body.get("invoice").cloned().unwrap_or_default())
-                .await?;
-            continue;
-        }
-        match RendererMessage::parse(&line) {
-            Ok(RendererMessage::Action(action)) => flow.action(action).await?,
-            Ok(RendererMessage::Hello(_)) => warn!("ignoring a second hello"),
-            Err(error) => warn!("ignoring message: {error}"),
-        }
+        Ok(())
     }
+    .await;
+    out.stop();
+    result
+}
+
+/// Answer one `cassis-hop/9` request on the shared endpoint.
+async fn answer_hop(connection: &Connection, node: &Node) -> Result<(), String> {
+    let peer = connection.remote_id();
+    let (mut send, mut recv) = tokio::time::timeout(HOP_TIMEOUT, connection.accept_bi())
+        .await
+        .map_err(|_| "no stream opened in time".to_string())?
+        .map_err(|e| format!("accept stream: {e}"))?;
+    let bytes = tokio::time::timeout(HOP_TIMEOUT, recv.read_to_end(MAX_HOP_BYTES))
+        .await
+        .map_err(|_| "request not received in time".to_string())?
+        .map_err(|e| format!("read request: {e}"))?;
+    let response = match serde_json::from_slice::<Request>(&bytes) {
+        Ok(request) => node.handle(request, peer).await,
+        Err(error) => Response::Error(format!("malformed request: {error}")),
+    };
+    let bytes = serde_json::to_vec(&response).map_err(|e| format!("encode response: {e}"))?;
+    send.write_all(&bytes)
+        .await
+        .map_err(|e| format!("send response: {e}"))?;
+    let _ = send.finish();
+    // Dropping the connection before the peer read everything would reset
+    // the stream; wait for it to close its side.
+    connection.closed().await;
     Ok(())
 }
 
@@ -448,23 +541,30 @@ mod tests {
     #[test]
     fn hello_session_and_force_resume() {
         let parse = |line: &str| match RendererMessage::parse(line).unwrap() {
-            RendererMessage::Hello(hello) => parse_hello(&hello),
+            RendererMessage::Hello(hello) => {
+                parse_hello(&hello).map(|hello| (hello.session, hello.force_resume, hello.params))
+            }
             _ => panic!("not a hello"),
+        };
+        let params = |name: &str| {
+            let mut params = Map::new();
+            params.insert("name".into(), json!(name));
+            params
         };
 
         assert_eq!(
             parse(r#"hello {"session":"f1K9xQ2v8Tn4LmZp7Rb3wq"}"#),
-            Ok(("f1K9xQ2v8Tn4LmZp7Rb3wq".into(), false))
+            Ok(("f1K9xQ2v8Tn4LmZp7Rb3wq".into(), false, Map::new()))
         );
         assert_eq!(
             parse(
                 r#"hello {"params":{"name":"Wall"},"session":"f1K9xQ2v8Tn4LmZp7Rb3wq","force_resume":true}"#
             ),
-            Ok(("f1K9xQ2v8Tn4LmZp7Rb3wq".into(), true))
+            Ok(("f1K9xQ2v8Tn4LmZp7Rb3wq".into(), true, params("Wall")))
         );
         assert_eq!(
             parse(r#"hello {"session":"f1K9xQ2v8Tn4LmZp7Rb3wq","force_resume":"yes"}"#),
-            Ok(("f1K9xQ2v8Tn4LmZp7Rb3wq".into(), false))
+            Ok(("f1K9xQ2v8Tn4LmZp7Rb3wq".into(), false, Map::new()))
         );
         assert!(parse(r#"hello {}"#).is_err());
         assert!(parse(r#"hello {"session":""}"#).is_err());
