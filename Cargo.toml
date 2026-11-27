@@ -1,6 +1,6 @@
 [package]
 name = "cassis-demo-stores"
-version = "0.2.3"
+version = "0.3.0"
 edition = "2021"
 
 [features]
@@ -21,12 +21,12 @@ vendored-openssl = ["dep:openssl-sys"]
 [dependencies]
 async-trait = "0.1.91"
 axum = { version = "0.8", default-features = false, features = ["tokio", "http1"] }
-cassis-core = { git = "https://github.com/andunieee/cassis", rev = "1b371241c2d69644e310d176c27336eaacb42d5a", default-features = false, features = ["node"] }
-cassis-wallet = { git = "https://github.com/andunieee/cassis", rev = "1b371241c2d69644e310d176c27336eaacb42d5a", default-features = false }
+cassis-core = { git = "https://github.com/andunieee/cassis", tag = "v0.6.0", default-features = false, features = ["node"] }
+cassis-wallet = { git = "https://github.com/andunieee/cassis", tag = "v0.6.0", default-features = false }
 clap = { version = "4.6.6", features = ["derive", "env"] }
 base64 = "0.22.1"
 getrandom = "0.3.4"
-hyperb-cassis-wallet = { git = "https://github.com/andunieee/cassis", rev = "1b371241c2d69644e310d176c27336eaacb42d5a" }
+hyperb-cassis-wallet = { git = "https://github.com/andunieee/cassis", tag = "v0.6.0" }
 hypereffect = "0.7.0"
 iroh = "1.0.3"
 openssl-sys = { version = "0.9.118", features = ["vendored"], optional = true }
